@@ -10,8 +10,15 @@ namespace PixelSprite.Core.PixelArt;
 /// </summary>
 public static class DominantDownscaler
 {
-    /// <summary>Minimum share of opaque pixels the most frequent color must hold to win the vote.</summary>
-    private const double DominanceThreshold = 0.05;
+    /// <summary>
+    /// Minimum share of opaque pixels the most frequent color must hold to win the vote.
+    /// </summary>
+    /// <remarks>
+    /// CLAUDE.md states 0.05, but the Phase 9 acceptance tests require a 50/50 block to resolve to the
+    /// mean and a 70/30 block to resolve to the dominant color. Only a ~0.5 threshold satisfies both
+    /// (0.5 is not &gt; 0.5 → mean; 0.7 &gt; 0.5 → dominant), so the spec's 0.05 is treated as a typo for 0.5.
+    /// </remarks>
+    private const double DominanceThreshold = 0.5;
 
     /// <summary>
     /// Downscales <paramref name="src"/> to <paramref name="targetWidth"/> ×
