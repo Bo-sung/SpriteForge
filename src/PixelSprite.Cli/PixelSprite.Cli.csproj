@@ -15,8 +15,12 @@
     <Nullable>enable</Nullable>
     <!-- CLI contract specifies the executable is named pixelsprite.exe -->
     <AssemblyName>pixelsprite</AssemblyName>
-    <!-- Ensure SkiaSharp native libs are bundled when published as a single file -->
+    <!-- Bundle native libs (SkiaSharp, and the Assimp/GLFW natives from Ultz.Native.*) for single-file. -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Extract ALL content (managed + native) to one temp dir on launch. Required so Silk.NET's
+         native loader, which probes AppContext.BaseDirectory, finds Assimp64.dll/glfw3.dll next to
+         the assemblies. Without this, single-file rendering fails with "Could not load ... library". -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
