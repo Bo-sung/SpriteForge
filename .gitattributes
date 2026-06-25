@@ -1,0 +1,20 @@
+# Normalize line endings: store text as LF in the repo, check out native on Windows.
+* text=auto
+
+# Source and config files are text.
+*.cs        text diff=csharp
+*.csproj    text
+*.sln       text eol=crlf
+*.props     text
+*.targets   text
+*.json      text
+*.md        text
+*.ps1       text eol=crlf
+*.gitignore text
+*.gitattributes text
+
+# Binary assets — never normalize.
+*.png  binary
+*.fbx  binary
+*.glb  binary
+*.dll  binary
