@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore PixelSprite.sln
+
+      - name: Build
+        run: dotnet build PixelSprite.sln -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test PixelSprite.sln -c Release --no-build --verbosity normal
+
+  publish:
+    name: Publish single-file exe
+    needs: build-and-test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish
+        run: pwsh ./build.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixelsprite-win-x64
+          path: ./bin/pixelsprite.exe
+          if-no-files-found: error
