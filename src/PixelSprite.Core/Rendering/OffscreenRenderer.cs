@@ -47,18 +47,22 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
         "layout(location = 1) in vec3 aNormal;\n" +
+        "layout(location = 2) in vec3 aColor;\n" +
         "uniform mat4 uMvp;\n" +
         "uniform mat4 uModel;\n" +
         "out vec3 vNormal;\n" +
+        "out vec3 vColor;\n" +
         "void main()\n" +
         "{\n" +
         "    gl_Position = uMvp * vec4(aPos, 1.0);\n" +
         "    vNormal = mat3(uModel) * aNormal;\n" +
+        "    vColor = aColor;\n" +
         "}\n";
 
     private const string FragmentShaderSource =
         "#version 330 core\n" +
         "in vec3 vNormal;\n" +
+        "in vec3 vColor;\n" +
         "uniform vec3 uLightDir;\n" +
         "uniform vec3 uBaseColor;\n" +
         "out vec4 FragColor;\n" +
@@ -67,7 +71,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         "    vec3 n = normalize(vNormal);\n" +
         "    float diff = max(dot(n, normalize(-uLightDir)), 0.0);\n" +
         "    float ambient = 0.35;\n" +
-        "    vec3 color = uBaseColor * (ambient + (1.0 - ambient) * diff);\n" +
+        "    // TODO: texture sampling\n" +
+        "    vec3 color = uBaseColor * vColor * (ambient + (1.0 - ambient) * diff);\n" +
         "    FragColor = vec4(color, 1.0);\n" +
         "}\n";
 
@@ -149,7 +154,6 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _gl.UseProgram(_program);
         var lightDir = new Vector3(-0.4f, -0.7f, -0.6f);
         _gl.Uniform3(_uLightDir, lightDir.X, lightDir.Y, lightDir.Z);
-        _gl.Uniform3(_uBaseColor, 0.75f, 0.75f, 0.78f);
 
         _gl.BindVertexArray(_vao);
 
@@ -157,6 +161,9 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         {
             Matrix4x4 model = axisFix;
             Matrix4x4 mvp = model * view * proj;
+            // Per-mesh base tint resolved from the material's diffuse color (or a gray fallback).
+            Vector3 baseColor = mesh.BaseColor;
+            _gl.Uniform3(_uBaseColor, baseColor.X, baseColor.Y, baseColor.Z);
             UploadAndDraw(mesh, mvp, model);
         }
 
@@ -242,7 +249,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
     private void UploadAndDraw(CpuMesh mesh, Matrix4x4 mvp, Matrix4x4 model)
     {
-        // Interleaved vertex data: position (3) + normal (3).
+        // Interleaved vertex data: position (3) + normal (3) + color (3).
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         fixed (float* v = mesh.Vertices)
         {
@@ -263,11 +270,13 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 BufferUsageARB.DynamicDraw);
         }
 
-        const uint stride = 6 * sizeof(float);
+        const uint stride = 9 * sizeof(float);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
+        _gl.EnableVertexAttribArray(2);
 
         SetMatrix(_uMvp, mvp);
         SetMatrix(_uModel, model);
@@ -337,7 +346,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 continue;
             }
 
-            result.Add(BuildMesh(mesh, nodeGlobals));
+            result.Add(BuildMesh(scene, mesh, nodeGlobals));
         }
 
         return result.ToArray();
@@ -405,7 +414,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
     }
 
-    private CpuMesh BuildMesh(Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals)
+    private CpuMesh BuildMesh(Scene scene, Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals)
     {
         int vertexCount = (int)mesh->MNumVertices;
         var positions = new Vector3[vertexCount];
@@ -423,11 +432,13 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ApplySkinning(mesh, nodeGlobals, positions, normals);
         }
 
-        // Interleave position + normal.
-        var vertices = new float[vertexCount * 6];
+        // Interleave position + normal + vertex color. Colors default to white so the per-mesh
+        // material base color carries the hue; the white attribute keeps the GLSL multiply a no-op.
+        // TODO: read actual per-vertex colors from mesh->MColors[0] when a model provides them.
+        var vertices = new float[vertexCount * 9];
         for (int i = 0; i < vertexCount; i++)
         {
-            int o = i * 6;
+            int o = i * 9;
             vertices[o + 0] = positions[i].X;
             vertices[o + 1] = positions[i].Y;
             vertices[o + 2] = positions[i].Z;
@@ -435,6 +446,9 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             vertices[o + 3] = n.X;
             vertices[o + 4] = n.Y;
             vertices[o + 5] = n.Z;
+            vertices[o + 6] = 1f;
+            vertices[o + 7] = 1f;
+            vertices[o + 8] = 1f;
         }
 
         // Triangulated indices (scene is expected to be imported with aiProcess_Triangulate).
@@ -452,7 +466,43 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             indices.Add(face.MIndices[2]);
         }
 
-        return new CpuMesh(vertices, indices.ToArray());
+        Vector3 baseColor = GetDiffuseColor(scene, mesh->MMaterialIndex);
+        return new CpuMesh(vertices, indices.ToArray(), baseColor);
+    }
+
+    /// <summary>Reads a material's diffuse color from its property list, falling back to neutral gray.</summary>
+    private static Vector3 GetDiffuseColor(Scene scene, uint materialIndex)
+    {
+        var fallback = new Vector3(0.75f, 0.75f, 0.78f);
+        if (scene.MMaterials is null || materialIndex >= scene.MNumMaterials)
+        {
+            return fallback;
+        }
+
+        Material* mat = scene.MMaterials[materialIndex];
+        if (mat is null)
+        {
+            return fallback;
+        }
+
+        // Assimp's glTF/FBX importers expose the base/diffuse color under the "$clr.diffuse" key as
+        // an array of floats. Scan the property list directly to avoid the marshaled GetMaterialColor.
+        for (uint p = 0; p < mat->MNumProperties; p++)
+        {
+            MaterialProperty* prop = mat->MProperties[p];
+            if (prop is null || prop->MData is null)
+            {
+                continue;
+            }
+
+            if (prop->MKey.AsString == "$clr.diffuse" && prop->MDataLength >= 3 * sizeof(float))
+            {
+                float* f = (float*)prop->MData;
+                return new Vector3(f[0], f[1], f[2]);
+            }
+        }
+
+        return fallback;
     }
 
     private void ApplySkinning(
@@ -511,7 +561,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         foreach (CpuMesh mesh in meshes)
         {
-            for (int i = 0; i < mesh.Vertices.Length; i += 6)
+            for (int i = 0; i < mesh.Vertices.Length; i += 9)
             {
                 var p = new Vector3(mesh.Vertices[i], mesh.Vertices[i + 1], mesh.Vertices[i + 2]);
                 p = Vector3.Transform(p, axisFix);
@@ -591,12 +641,17 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// <summary>Bounding sphere of the posed model, used for camera framing.</summary>
     private readonly record struct Bounds(Vector3 Center, float Radius);
 
-    /// <summary>Skinned CPU geometry: interleaved [px,py,pz,nx,ny,nz] vertices and triangle indices.</summary>
-    private sealed class CpuMesh(float[] vertices, uint[] indices) : IDisposable
+    /// <summary>
+    /// Skinned CPU geometry: interleaved [px,py,pz, nx,ny,nz, r,g,b] vertices, triangle indices,
+    /// and the mesh's material base color (used as a per-mesh tint uniform).
+    /// </summary>
+    private sealed class CpuMesh(float[] vertices, uint[] indices, Vector3 baseColor) : IDisposable
     {
         public float[] Vertices { get; } = vertices;
 
         public uint[] Indices { get; } = indices;
+
+        public Vector3 BaseColor { get; } = baseColor;
 
         public void Dispose()
         {
