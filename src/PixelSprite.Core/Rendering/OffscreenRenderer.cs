@@ -295,14 +295,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
     private void SetMatrix(int location, Matrix4x4 m)
     {
-        // System.Numerics.Matrix4x4 is row-major; GLSL expects column-major, so transpose on upload.
+        // System.Numerics uses the row-vector convention (clip = v_row * m), so the GLSL matrix must be
+        // m^T. We upload m's fields in System.Numerics order and let GL transpose on upload (transpose:
+        // true reinterprets these as rows, yielding m^T). NOTE: getting this wrong only distorts large,
+        // asymmetric models — small/symmetric ones still look plausible.
         Span<float> data = stackalloc float[16]
         {
-            m.M11, m.M21, m.M31, m.M41,
-            m.M12, m.M22, m.M32, m.M42,
-            m.M13, m.M23, m.M33, m.M43,
-            m.M14, m.M24, m.M34, m.M44,
+            m.M11, m.M12, m.M13, m.M14,
+            m.M21, m.M22, m.M23, m.M24,
+            m.M31, m.M32, m.M33, m.M34,
+            m.M41, m.M42, m.M43, m.M44,
         };
+        // Natural (row-major) order read as column-major yields m^T — the column-vector form GLSL needs.
         _gl.UniformMatrix4(location, 1, false, data);
     }
 
