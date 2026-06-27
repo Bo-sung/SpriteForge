@@ -132,6 +132,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// <param name="opts">Render options (zoom, projection, up axis).</param>
     /// <returns>A new bitmap; the caller owns and must dispose it.</returns>
     public SKBitmap RenderFrame(Scene scene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
+        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts);
+
+    /// <summary>
+    /// Renders one frame using an animation taken from a SEPARATE scene (<paramref name="animationScene"/>),
+    /// retargeted onto <paramref name="scene"/>'s skeleton by matching node/bone names. Geometry and the
+    /// node hierarchy come from <paramref name="scene"/>; only animation channels are read from
+    /// <paramref name="animationScene"/> (pass the same scene for both to use an embedded animation).
+    /// </summary>
+    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
     {
         ArgumentNullException.ThrowIfNull(opts);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -147,7 +156,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             : Matrix4x4.Identity;
 
         // Compute scene bounds (in corrected space) to frame the camera.
-        var meshes = ExtractMeshes(scene, animIndex, time);
+        var meshes = ExtractMeshes(scene, animationScene, animIndex, time);
         Bounds bounds = ComputeBounds(meshes, axisFix);
         (Matrix4x4 view, Matrix4x4 proj) = BuildCamera(bounds, yaw, pitch, opts);
 
@@ -324,8 +333,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
     // -- Assimp scene extraction + CPU skinning ------------------------------------------------
 
-    /// <summary>Extracts every mesh as skinned, triangulated CPU geometry for the given animation time.</summary>
-    private CpuMesh[] ExtractMeshes(Scene scene, int animIndex, float time)
+    /// <summary>
+    /// Extracts every mesh as skinned, triangulated CPU geometry for the given animation time. Geometry
+    /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
+    /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
+    /// </summary>
+    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time)
     {
         if (scene.MRootNode is null || scene.MNumMeshes == 0)
         {
@@ -334,7 +347,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         // Global transform per node, with animation applied where channels exist.
         var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(scene, animIndex, time);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time);
         AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
 
         var result = new List<CpuMesh>((int)scene.MNumMeshes);

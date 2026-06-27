@@ -38,15 +38,14 @@ public sealed class RenderJob
             throw new FileNotFoundException($"Input model not found: {renderOpts.Input}", renderOpts.Input);
         }
 
-        if (!string.IsNullOrEmpty(renderOpts.Anim))
+        if (!string.IsNullOrEmpty(renderOpts.Anim) && !System.IO.File.Exists(renderOpts.Anim))
         {
-            // Cross-file animation retargeting (separate --anim) is not yet implemented; the embedded
-            // animation of the input model is used instead. Surfaced rather than silently ignored.
-            progress?.Invoke("warning: separate --anim retargeting is not implemented; using embedded animation.");
+            throw new FileNotFoundException($"Animation file not found: {renderOpts.Anim}", renderOpts.Anim);
         }
 
         var assimp = AssimpApi.GetApi();
         Scene* scene = null;
+        Scene* animScene = null;
         var frames = new List<SpriteFrame>();
         OffscreenRenderer? renderer = null;
         var processor = new PixelArtProcessor();
@@ -66,9 +65,26 @@ public sealed class RenderJob
                     $"Failed to load model '{renderOpts.Input}': {(string.IsNullOrEmpty(err) ? "unknown Assimp error" : err)}");
             }
 
-            int animIndex = scene->MNumAnimations > 0 ? 0 : -1;
-            string animName = ResolveAnimName(scene, animIndex);
-            int frameCount = ResolveFrameCount(scene, animIndex, renderOpts);
+            // Animation source: a separate --anim file (retargeted by bone name) if given, else the
+            // animation embedded in the input model.
+            Scene* animSource = scene;
+            if (!string.IsNullOrEmpty(renderOpts.Anim))
+            {
+                animScene = assimp.ImportFile(renderOpts.Anim, flags);
+                if (animScene is null || animScene->MNumAnimations == 0)
+                {
+                    string err = assimp.GetErrorStringS();
+                    throw new InvalidOperationException(
+                        $"Failed to load animation '{renderOpts.Anim}': {(string.IsNullOrEmpty(err) ? "no animations found" : err)}");
+                }
+
+                animSource = animScene;
+                progress?.Invoke($"retargeting animation from {System.IO.Path.GetFileName(renderOpts.Anim)} by bone name.");
+            }
+
+            int animIndex = animSource->MNumAnimations > 0 ? 0 : -1;
+            string animName = ResolveAnimName(animSource, animIndex);
+            int frameCount = ResolveFrameCount(animSource, animIndex, renderOpts);
 
             IReadOnlyList<float> yaws = DirectionScheduler.GetYaws(renderOpts.Directions);
 
@@ -81,7 +97,9 @@ public sealed class RenderJob
                 {
                     float time = renderOpts.Fps > 0 ? (float)f / renderOpts.Fps : 0f;
 
-                    using var hires = renderer.RenderFrame(*scene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts);
+                    using var hires = animScene is not null
+                        ? renderer.RenderFrame(*scene, *animScene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts)
+                        : renderer.RenderFrame(*scene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts);
                     var sprite = processor.Process(hires, pixelOpts);
 
                     frames.Add(new SpriteFrame
@@ -114,6 +132,11 @@ public sealed class RenderJob
             if (scene is not null)
             {
                 assimp.FreeScene(scene);
+            }
+
+            if (animScene is not null)
+            {
+                assimp.FreeScene(animScene);
             }
 
             assimp.Dispose();
