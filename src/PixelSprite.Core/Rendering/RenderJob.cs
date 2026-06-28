@@ -21,19 +21,31 @@ public sealed class RenderJob
     /// <param name="pixelOpts">Pixel-art options applied to every rendered frame.</param>
     /// <param name="progress">Optional callback for per-frame progress messages.</param>
     /// <returns>The materialized list of processed sprite frames.</returns>
+    /// <summary>
+    /// Executes the pipeline with no equipment. Equivalent to passing a null equipment manifest.
+    /// </summary>
     public IEnumerable<SpriteFrame> Execute(
         RenderOptions renderOpts, PixelArtOptions pixelOpts, Action<string>? progress = null)
+        => Execute(renderOpts, pixelOpts, equipment: null, progress);
+
+    /// <summary>
+    /// Executes the full pipeline: loads the scene once, optionally equips attachments from
+    /// <paramref name="equipment"/>, then loops over every direction × frame.
+    /// </summary>
+    /// <param name="equipment">Optional equipment manifest (Unreal socket / master-pose attachments).</param>
+    public IEnumerable<SpriteFrame> Execute(
+        RenderOptions renderOpts, PixelArtOptions pixelOpts, EquipmentManifest? equipment, Action<string>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(renderOpts);
         ArgumentNullException.ThrowIfNull(pixelOpts);
 
         // Materialized rather than lazily yielded: the Assimp scene is an unmanaged pointer and C#
         // iterators cannot carry pointer locals across yield boundaries. The frame set is small.
-        return RenderAll(renderOpts, pixelOpts, progress);
+        return RenderAll(renderOpts, pixelOpts, equipment, progress);
     }
 
     private static unsafe List<SpriteFrame> RenderAll(
-        RenderOptions renderOpts, PixelArtOptions pixelOpts, Action<string>? progress)
+        RenderOptions renderOpts, PixelArtOptions pixelOpts, EquipmentManifest? equipment, Action<string>? progress)
     {
         if (!System.IO.File.Exists(renderOpts.Input))
         {
@@ -48,6 +60,7 @@ public sealed class RenderJob
         var assimp = AssimpApi.GetApi();
         Scene* scene = null;
         Scene* animScene = null;
+        List<IntPtr> attachmentScenes = new();
         var frames = new List<SpriteFrame>();
         OffscreenRenderer? renderer = null;
         var processor = new PixelArtProcessor();
@@ -97,6 +110,31 @@ public sealed class RenderJob
 
             IReadOnlyList<float> yaws = DirectionScheduler.GetYaws(renderOpts.Directions);
 
+            // Load equipment attachment scenes once; they are reused across every direction × frame.
+            // Each loaded scene is tracked in `attachmentScenes` for cleanup and wrapped for the renderer.
+            var attachments = new List<AttachmentScene>();
+            if (equipment is not null)
+            {
+                foreach (Attachment att in equipment.Attachments)
+                {
+                    Scene* attScene = assimp.ImportFile(att.ResolvedFile, flags);
+                    if (attScene is null || attScene->MRootNode is null)
+                    {
+                        string err = assimp.GetErrorStringS();
+                        throw new InvalidOperationException(
+                            $"Failed to load attachment '{att.Name}' ({att.ResolvedFile}): " +
+                            $"{(string.IsNullOrEmpty(err) ? "unknown Assimp error" : err)}");
+                    }
+
+                    attachmentScenes.Add((IntPtr)attScene);
+                    attachments.Add(new AttachmentScene(*attScene, att));
+                    progress?.Invoke(
+                        att.UseMasterPose
+                            ? $"equipped '{att.Name}' (master-pose)."
+                            : $"equipped '{att.Name}' (socket -> {att.SocketBone}).");
+                }
+            }
+
             renderer = new OffscreenRenderer(renderOpts.RenderSize, renderOpts.RenderSize);
 
             for (int dir = 0; dir < yaws.Count; dir++)
@@ -107,8 +145,8 @@ public sealed class RenderJob
                     float time = renderOpts.Fps > 0 ? (float)f / renderOpts.Fps : 0f;
 
                     using var hires = animScene is not null
-                        ? renderer.RenderFrame(*scene, *animScene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts)
-                        : renderer.RenderFrame(*scene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts);
+                        ? renderer.RenderFrame(*scene, *animScene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts, attachments)
+                        : renderer.RenderFrame(*scene, animIndex, yaw, renderOpts.CamPitch, time, renderOpts, attachments);
                     var sprite = processor.Process(hires, pixelOpts);
 
                     frames.Add(new SpriteFrame
@@ -146,6 +184,11 @@ public sealed class RenderJob
             if (animScene is not null)
             {
                 assimp.FreeScene(animScene);
+            }
+
+            foreach (IntPtr attPtr in attachmentScenes)
+            {
+                assimp.FreeScene((Scene*)attPtr);
             }
 
             assimp.Dispose();

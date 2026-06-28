@@ -1,0 +1,15 @@
+{
+  // Example equipment manifest. Run with:
+  //   pixelsprite --input samples/rigged.gltf --anim samples/anim.gltf \
+  //     --directions 4 --equip samples/equipment.json --out output
+  //
+  // Attaches the sample cube to the rig's "joint1" bone as a socket-bound weapon.
+  "attachments": [
+    {
+      "name": "weapon",
+      "file": "cube.obj",
+      "socketBone": "joint1",
+      "offset": { "position": [0, 1.5, 0], "rotation": [0, 45, 0], "scale": 0.5 }
+    }
+  ]
+}

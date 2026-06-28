@@ -158,17 +158,32 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// <param name="opts">Render options (zoom, projection, up axis).</param>
     /// <returns>A new bitmap; the caller owns and must dispose it.</returns>
     public SKBitmap RenderFrame(Scene scene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
-        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts);
+        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts, Array.Empty<AttachmentScene>());
+
+    /// <summary>
+    /// Renders one frame with equipment, using the embedded animation (no separate animation scene).
+    /// </summary>
+    public SKBitmap RenderFrame(Scene scene, int animIndex, float yaw, float pitch, float time, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
+        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts, attachments);
+
+    /// <summary>
+    /// Renders one frame using an animation from <paramref name="animationScene"/> with no equipment.
+    /// Equivalent to passing an empty attachment list.
+    /// </summary>
+    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
+        => RenderFrame(scene, animationScene, animIndex, yaw, pitch, time, opts, Array.Empty<AttachmentScene>());
 
     /// <summary>
     /// Renders one frame using an animation taken from a SEPARATE scene (<paramref name="animationScene"/>),
-    /// retargeted onto <paramref name="scene"/>'s skeleton by matching node/bone names. Geometry and the
-    /// node hierarchy come from <paramref name="scene"/>; only animation channels are read from
+    /// retargeted onto <paramref name="scene"/>'s skeleton by matching node/bone names, with optional
+    /// equipment attachments (Unreal socket / master-pose) bound to the character's bones. Geometry and
+    /// the node hierarchy come from <paramref name="scene"/>; animation channels come from
     /// <paramref name="animationScene"/> (pass the same scene for both to use an embedded animation).
     /// </summary>
-    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
+    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(attachments);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
@@ -181,14 +196,23 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
             : Matrix4x4.Identity;
 
-        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace, out Dictionary<string, Matrix4x4> nodeGlobals);
+        // Character node globals are evaluated once per frame and reused for character skinning, every
+        // attachment's socket world matrix / master-pose skinning source, AND the root-bone anchor lookup.
+        var nodeGlobals = BuildNodeGlobals(scene, animationScene, animIndex, time, opts.InPlace);
+        var meshes = ExtractMeshes(scene, nodeGlobals);
 
-        // Whole-clip framing yields a constant zoom (radius) so scale never pops across the sheet. The
-        // CENTRE is re-anchored on THIS frame's root/hips bone position so the character's body stays
-        // pinned to screen centre across every frame and direction (no swimming) — the game-sprite
-        // convention. With --in-place the root's horizontal travel is already pinned, so this also kills
-        // the residual vertical/offset drift. Falls back to the clip's AABB centre for static props.
-        Bounds framing = GetGlobalFraming(scene, animationScene, animIndex, opts);
+        foreach (AttachmentScene att in attachments)
+        {
+            meshes = AppendMeshes(meshes, ExtractAttachmentMeshes(att.Scene, att.Definition, nodeGlobals));
+        }
+
+        // Whole-clip framing yields a constant zoom (radius sized to the farthest any vertex — including
+        // attachments — reaches from the root/hips bone) so scale never pops across the sheet. The CENTRE
+        // is re-anchored on THIS frame's root/hips bone position so the character's body stays pinned to
+        // screen centre across every frame and direction (no swimming) — the game-sprite convention.
+        // With --in-place the root's horizontal travel is already pinned, so this also kills residual
+        // vertical/offset drift. Falls back to the clip's AABB centre for static props.
+        Bounds framing = GetGlobalFraming(scene, animationScene, animIndex, opts, attachments);
         Vector3 anchor = GetRootWorldPosition(scene, animationScene, animIndex, nodeGlobals, axisFix) ?? framing.Center;
         Bounds bounds = new Bounds(anchor, framing.Radius);
 
@@ -396,49 +420,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     // -- Assimp scene extraction + CPU skinning ------------------------------------------------
 
     /// <summary>
-    /// Extracts every mesh as skinned, triangulated CPU geometry for the given animation time. Geometry
-    /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
-    /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
+    /// Per-node global transforms (hierarchy from <paramref name="scene"/>) with the animation at
+    /// <paramref name="time"/> applied where channels exist in <paramref name="animScene"/>. The returned
+    /// map is the "bone world matrix" table reused for character skinning, equipment socket / master-pose
+    /// math, and the root-bone screen-centre anchor lookup.
     /// </summary>
-    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
-        => ExtractMeshes(scene, animScene, animIndex, time, inPlace, out _);
-
-    /// <summary>
-    /// Extracts every mesh as skinned, triangulated CPU geometry for the given animation time, and also
-    /// returns the per-node global transforms used to build it (reused for root-bone lookups). Geometry
-    /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
-    /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
-    /// </summary>
-    private CpuMesh[] ExtractMeshes(
-        Scene scene, Scene animScene, int animIndex, float time, bool inPlace,
-        out Dictionary<string, Matrix4x4> nodeGlobals)
-    {
-        nodeGlobals = BuildNodeGlobals(scene, animScene, animIndex, time, inPlace);
-
-        if (scene.MRootNode is null || scene.MNumMeshes == 0)
-        {
-            return Array.Empty<CpuMesh>();
-        }
-
-        var result = new List<CpuMesh>((int)scene.MNumMeshes);
-        for (uint mi = 0; mi < scene.MNumMeshes; mi++)
-        {
-            Mesh* mesh = scene.MMeshes[mi];
-            if (mesh is null || mesh->MNumVertices == 0)
-            {
-                continue;
-            }
-
-            result.Add(BuildMesh(scene, mesh, nodeGlobals));
-        }
-
-        return result.ToArray();
-    }
-
-    /// <summary>Per-node global transforms (hierarchy from <paramref name="scene"/>) with the animation at
-    /// <paramref name="time"/> applied where channels exist in <paramref name="animScene"/>.</summary>
-    private Dictionary<string, Matrix4x4> BuildNodeGlobals(
-        Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
+    private Dictionary<string, Matrix4x4> BuildNodeGlobals(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
     {
         var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
         Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
@@ -446,62 +433,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         return nodeGlobals;
     }
 
-    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
-    {
-        if (animIndex < 0 || animIndex >= scene.MNumAnimations || scene.MAnimations is null)
-        {
-            return null;
-        }
-
-        Animation* anim = scene.MAnimations[animIndex];
-        if (anim is null)
-        {
-            return null;
-        }
-
-        double ticksPerSecond = anim->MTicksPerSecond != 0 ? anim->MTicksPerSecond : 25.0;
-        double durationTicks = anim->MDuration > 0 ? anim->MDuration : 1.0;
-        double timeInTicks = time * ticksPerSecond;
-        double animTick = durationTicks > 0 ? timeInTicks % durationTicks : 0.0;
-
-        var samplers = new Dictionary<string, NodeAnimSampler>(StringComparer.Ordinal);
-        for (uint c = 0; c < anim->MNumChannels; c++)
-        {
-            NodeAnim* channel = anim->MChannels[c];
-            if (channel is null)
-            {
-                continue;
-            }
-
-            string name = channel->MNodeName.AsString;
-            samplers[name] = NodeAnimSampler.Sample(channel, animTick);
-        }
-
-        // Strip root motion: pin the root/hips node's horizontal translation to its start position so
-        // the character stays centered (the vertical bob is preserved).
-        if (inPlace)
-        {
-            RootMotionInfo rm = GetRootMotion(anim);
-            if (rm.HasMotion && samplers.TryGetValue(rm.Node, out NodeAnimSampler rootSampler))
-            {
-                samplers[rm.Node] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
-            }
-        }
-
-        return samplers;
-    }
-
-    /// <summary>Lazily analyzes (and caches) the active animation's root motion; the clip never changes per run.</summary>
-    private RootMotionInfo GetRootMotion(Animation* anim)
-    {
-        if (!_rootMotionComputed)
-        {
-            _rootMotion = RootMotion.Analyze(anim);
-            _rootMotionComputed = true;
-        }
-
-        return _rootMotion;
-    }
+    // -- Root/hips bone screen-centre anchoring (game-sprite framing) --------------------------
 
     /// <summary>
     /// Resolves (and caches) the name of the bone to anchor at screen centre for game sprites: the
@@ -612,6 +544,198 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         return max;
     }
 
+    /// <summary>
+    /// Extracts every mesh as skinned, triangulated CPU geometry using the supplied per-node globals.
+    /// Static (unskinned) meshes are placed at their owning node's global transform — this is what lets
+    /// a weapon mesh parented under a hand bone (via socket) track the bone, and lets static props in a
+    /// multi-node scene sit correctly rather than collapsing to the origin.
+    /// </summary>
+    private CpuMesh[] ExtractMeshes(Scene scene, Dictionary<string, Matrix4x4> nodeGlobals)
+    {
+        if (scene.MRootNode is null || scene.MNumMeshes == 0)
+        {
+            return Array.Empty<CpuMesh>();
+        }
+
+        var meshToNode = new Dictionary<uint, string>();
+        BuildMeshToNodeMap(scene.MRootNode, meshToNode);
+
+        var result = new List<CpuMesh>((int)scene.MNumMeshes);
+        for (uint mi = 0; mi < scene.MNumMeshes; mi++)
+        {
+            Mesh* mesh = scene.MMeshes[mi];
+            if (mesh is null || mesh->MNumVertices == 0)
+            {
+                continue;
+            }
+
+            meshToNode.TryGetValue(mi, out string? ownerNodeName);
+            result.Add(BuildMesh(scene, mesh, nodeGlobals, ownerNodeName, Matrix4x4.Identity, forceStatic: false));
+        }
+
+        return result.ToArray();
+    }
+
+    /// <summary>Walks the node tree recording which node directly owns each scene mesh index.</summary>
+    private static void BuildMeshToNodeMap(Node* node, Dictionary<uint, string> output)
+    {
+        if (node is null)
+        {
+            return;
+        }
+
+        string name = node->MName.AsString;
+        for (uint i = 0; i < node->MNumMeshes; i++)
+        {
+            output[node->MMeshes[i]] = name;
+        }
+
+        for (uint i = 0; i < node->MNumChildren; i++)
+        {
+            BuildMeshToNodeMap(node->MChildren[i], output);
+        }
+    }
+
+    /// <summary>
+    /// Extracts an attachment's meshes and places them on the character. Socket mode treats the mesh as
+    /// rigid at <c>offset × boneGlobal</c> (Unreal's AttachToComponent formula); master-pose mode skins
+    /// it with the character's per-frame bone globals using the attachment's own offset matrices.
+    /// </summary>
+    private CpuMesh[] ExtractAttachmentMeshes(
+        Scene attScene, Attachment att, Dictionary<string, Matrix4x4> characterNodeGlobals)
+    {
+        if (attScene.MRootNode is null || attScene.MNumMeshes == 0)
+        {
+            return Array.Empty<CpuMesh>();
+        }
+
+        // The attachment's own node globals (bind pose — attachments carry no animation channels).
+        var attNodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
+        AccumulateNodeTransforms(attScene.MRootNode, Matrix4x4.Identity, null, attNodeGlobals);
+
+        var meshToNode = new Dictionary<uint, string>();
+        BuildMeshToNodeMap(attScene.MRootNode, meshToNode);
+
+        Matrix4x4 rootTransform;
+        bool forceStatic;
+        Dictionary<string, Matrix4x4> skinningGlobals;
+
+        if (att.UseMasterPose)
+        {
+            // Master-pose (armour): skin with the character's bone poses; the attachment's own bone
+            // offset matrices are read per-bone inside BuildMesh. No socket root transform.
+            rootTransform = Matrix4x4.Identity;
+            forceStatic = false;
+            skinningGlobals = characterNodeGlobals;
+        }
+        else
+        {
+            // Socket (weapon): place the mesh rigidly at the socket's world transform.
+            if (string.IsNullOrEmpty(att.SocketBone)
+                || !characterNodeGlobals.TryGetValue(att.SocketBone!, out Matrix4x4 boneGlobal))
+            {
+                throw new InvalidOperationException(
+                    $"Attachment '{att.Name}': socket bone '{att.SocketBone}' not found on the character skeleton.");
+            }
+
+            Matrix4x4 offset = SocketTransform.ToMatrix(att.OffsetPosition, att.OffsetRotation, att.OffsetScale);
+            rootTransform = offset * boneGlobal; // row-vector: weapon local → offset → bone global
+            forceStatic = true; // rigid: ignore any bones in the attachment, position purely at the socket
+            skinningGlobals = attNodeGlobals;
+        }
+
+        var result = new List<CpuMesh>((int)attScene.MNumMeshes);
+        for (uint mi = 0; mi < attScene.MNumMeshes; mi++)
+        {
+            Mesh* mesh = attScene.MMeshes[mi];
+            if (mesh is null || mesh->MNumVertices == 0)
+            {
+                continue;
+            }
+
+            meshToNode.TryGetValue(mi, out string? ownerNodeName);
+            result.Add(BuildMesh(attScene, mesh, skinningGlobals, ownerNodeName, rootTransform, forceStatic));
+        }
+
+        return result.ToArray();
+    }
+
+    /// <summary>Concatenates two mesh arrays (avoids LINQ allocations in the per-frame hot path).</summary>
+    private static CpuMesh[] AppendMeshes(CpuMesh[] head, CpuMesh[] tail)
+    {
+        if (tail.Length == 0)
+        {
+            return head;
+        }
+
+        if (head.Length == 0)
+        {
+            return tail;
+        }
+
+        var combined = new CpuMesh[head.Length + tail.Length];
+        Array.Copy(head, combined, head.Length);
+        Array.Copy(tail, 0, combined, head.Length, tail.Length);
+        return combined;
+    }
+
+    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
+    {
+        if (animIndex < 0 || animIndex >= scene.MNumAnimations || scene.MAnimations is null)
+        {
+            return null;
+        }
+
+        Animation* anim = scene.MAnimations[animIndex];
+        if (anim is null)
+        {
+            return null;
+        }
+
+        double ticksPerSecond = anim->MTicksPerSecond != 0 ? anim->MTicksPerSecond : 25.0;
+        double durationTicks = anim->MDuration > 0 ? anim->MDuration : 1.0;
+        double timeInTicks = time * ticksPerSecond;
+        double animTick = durationTicks > 0 ? timeInTicks % durationTicks : 0.0;
+
+        var samplers = new Dictionary<string, NodeAnimSampler>(StringComparer.Ordinal);
+        for (uint c = 0; c < anim->MNumChannels; c++)
+        {
+            NodeAnim* channel = anim->MChannels[c];
+            if (channel is null)
+            {
+                continue;
+            }
+
+            string name = channel->MNodeName.AsString;
+            samplers[name] = NodeAnimSampler.Sample(channel, animTick);
+        }
+
+        // Strip root motion: pin the root/hips node's horizontal translation to its start position so
+        // the character stays centered (the vertical bob is preserved).
+        if (inPlace)
+        {
+            RootMotionInfo rm = GetRootMotion(anim);
+            if (rm.HasMotion && samplers.TryGetValue(rm.Node, out NodeAnimSampler rootSampler))
+            {
+                samplers[rm.Node] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
+            }
+        }
+
+        return samplers;
+    }
+
+    /// <summary>Lazily analyzes (and caches) the active animation's root motion; the clip never changes per run.</summary>
+    private RootMotionInfo GetRootMotion(Animation* anim)
+    {
+        if (!_rootMotionComputed)
+        {
+            _rootMotion = RootMotion.Analyze(anim);
+            _rootMotionComputed = true;
+        }
+
+        return _rootMotion;
+    }
+
     private void AccumulateNodeTransforms(
         Node* node, Matrix4x4 parent,
         Dictionary<string, NodeAnimSampler>? samplers, Dictionary<string, Matrix4x4> output)
@@ -640,7 +764,9 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
     }
 
-    private CpuMesh BuildMesh(Scene scene, Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals)
+    private CpuMesh BuildMesh(
+        Scene scene, Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals,
+        string? ownerNodeName, Matrix4x4 rootTransform, bool forceStatic)
     {
         int vertexCount = (int)mesh->MNumVertices;
         var positions = new Vector3[vertexCount];
@@ -652,10 +778,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             normals[i] = mesh->MNormals != null ? mesh->MNormals[i] : Vector3.UnitY;
         }
 
-        // Apply bone skinning when present, otherwise leave vertices in mesh space.
-        if (mesh->MNumBones > 0)
+        // Skinned meshes use bone offset × global. Static (or socket-rigid) meshes are placed at their
+        // owning node's global transform, optionally composed with an extra root (the socket matrix).
+        if (!forceStatic && mesh->MNumBones > 0)
         {
             ApplySkinning(mesh, nodeGlobals, positions, normals);
+        }
+        else
+        {
+            ApplyStaticTransform(positions, normals, nodeGlobals, ownerNodeName, rootTransform);
         }
 
         // Optional UV set 0 for texture sampling (null when the mesh has no UVs).
@@ -943,13 +1074,42 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     }
 
     /// <summary>
-    /// Computes a single constant zoom (radius) for the whole clip so scale never pops across the sheet.
-    /// The radius is sized to the farthest any vertex reaches from the root/hips bone (so nothing clips
-    /// once the camera is centred on the root); it falls back to the AABB half-diagonal when no root bone
-    /// is detectable. The centre is re-anchored per frame in <see cref="RenderFrame"/>. Cached after the
-    /// first call. A static model (no animation) samples only its single pose.
+    /// Places a static mesh: <c>position' = v × (owningNodeGlobal × rootTransform)</c>.
+    /// <paramref name="rootTransform"/> is the socket world matrix for weapon attachments, or identity
+    /// for plain static scene meshes (so they sit at their node instead of collapsing to the origin).
     /// </summary>
-    private Bounds GetGlobalFraming(Scene scene, Scene animScene, int animIndex, RenderOptions opts)
+    private static void ApplyStaticTransform(
+        Vector3[] positions, Vector3[] normals,
+        Dictionary<string, Matrix4x4> nodeGlobals, string? ownerNodeName, Matrix4x4 rootTransform)
+    {
+        Matrix4x4 nodeTransform = (ownerNodeName is not null && nodeGlobals.TryGetValue(ownerNodeName, out Matrix4x4 nt))
+            ? nt
+            : Matrix4x4.Identity;
+
+        Matrix4x4 full = nodeTransform * rootTransform;
+        if (full == Matrix4x4.Identity)
+        {
+            return; // common fast path: a rootless static mesh with no socket
+        }
+
+        Matrix4x4 normalMatrix = SocketTransform.WithoutTranslation(full);
+        for (int i = 0; i < positions.Length; i++)
+        {
+            positions[i] = Vector3.Transform(positions[i], full);
+            normals[i] = Vector3.TransformNormal(normals[i], normalMatrix);
+        }
+    }
+
+    /// <summary>
+    /// Computes a single constant zoom (radius) for the whole clip so scale never pops across the sheet.
+    /// The radius is sized to the farthest any vertex — including attachments — reaches from the root/hips
+    /// bone (so nothing clips once the camera is centred on the root); it falls back to the AABB
+    /// half-diagonal when no root bone is detectable. The centre is re-anchored per frame in
+    /// <see cref="RenderFrame"/>. Cached after the first call. A static model (no animation) samples only
+    /// its single pose.
+    /// </summary>
+    private Bounds GetGlobalFraming(
+        Scene scene, Scene animScene, int animIndex, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
     {
         if (_framingComputed)
         {
@@ -970,7 +1130,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         for (int s = 0; s < samples; s++)
         {
             float t = samples > 1 ? (float)(durationSeconds * s / (samples - 1)) : 0f;
-            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace, out Dictionary<string, Matrix4x4> nodeGlobals);
+            var nodeGlobals = BuildNodeGlobals(scene, animScene, animIndex, t, opts.InPlace);
+            CpuMesh[] sampleMeshes = ExtractMeshes(scene, nodeGlobals);
+            foreach (AttachmentScene att in attachments)
+            {
+                sampleMeshes = AppendMeshes(sampleMeshes, ExtractAttachmentMeshes(att.Scene, att.Definition, nodeGlobals));
+            }
             (Vector3 mn, Vector3 mx, bool ok) = ComputeAabb(sampleMeshes, axisFix);
             if (ok)
             {
@@ -979,8 +1144,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 any = true;
             }
 
-            // Track the farthest any vertex reaches from the root bone across the whole clip, so the zoom
-            // fits every pose once the camera is centred on the root (nothing is clipped).
+            // Track the farthest any vertex (character + attachments) reaches from the root bone across
+            // the whole clip, so the zoom fits every pose once the camera is centred on the root.
             if (GetRootWorldPosition(scene, animScene, animIndex, nodeGlobals, axisFix) is { } rootPos)
             {
                 maxDistFromRoot = MathF.Max(maxDistFromRoot, MaxVertexDistance(sampleMeshes, axisFix, rootPos));
@@ -994,7 +1159,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         Bounds aabb = any ? BoundsFromAabb(min, max) : new Bounds(Vector3.Zero, 1f);
         // Root-anchored framing for game sprites: keep a constant zoom, but size it to the farthest vertex
-        // from the root bone so no pose is clipped. The centre is re-anchored per frame by the caller.
+        // from the root bone so no pose (or weapon reach) is clipped. The centre is re-anchored per frame.
         float radius = maxDistFromRoot > 1e-3f ? maxDistFromRoot : aabb.Radius;
         _framing = new Bounds(aabb.Center, radius);
         _framingComputed = true;

@@ -70,6 +70,8 @@ internal static class Program
             "--in-place", "Remove root motion: hold the root/hips horizontal translation so the character stays centered.");
         var checkRootMotionOption = new Option<bool>(
             "--check-root-motion", "Report whether the animation has root motion, then exit without rendering.");
+        var equipOption = new Option<string?>(
+            "--equip", "Equipment manifest JSON (Unreal socket / master-pose attachments: weapons, armor).");
 
         var rootCommand = new RootCommand("PixelSprite CLI - render a rigged model to pixel-art sprite sheets.");
 
@@ -99,6 +101,7 @@ internal static class Program
         rootCommand.AddOption(verboseOption);
         rootCommand.AddOption(inPlaceOption);
         rootCommand.AddOption(checkRootMotionOption);
+        rootCommand.AddOption(equipOption);
 
         rootCommand.SetHandler((InvocationContext ctx) =>
         {
@@ -135,6 +138,14 @@ internal static class Program
                     return;
                 }
 
+                // --equip: load the equipment manifest (validates all attachment files up front).
+                EquipmentManifest? equipment = null;
+                string? equipPath = parsed.GetValueForOption(equipOption);
+                if (!string.IsNullOrEmpty(equipPath))
+                {
+                    equipment = EquipmentManifestLoader.Load(equipPath);
+                }
+
                 (bool morph, bool jaggy) = ParseCleanup(parsed.GetValueForOption(cleanupOption)!);
 
                 var pixelOpts = new PixelArtOptions
@@ -156,7 +167,7 @@ internal static class Program
 
                 Action<string>? progress = verbose ? Console.WriteLine : null;
 
-                List<SpriteFrame> frames = new RenderJob().Execute(renderOpts, pixelOpts, progress).ToList();
+                List<SpriteFrame> frames = new RenderJob().Execute(renderOpts, pixelOpts, equipment, progress).ToList();
                 try
                 {
                     Save(frames, renderOpts, pixelOpts, outputOpts);
