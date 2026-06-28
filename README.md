@@ -60,7 +60,8 @@ Render the committed sample cube from 4 directions and emit both a sheet and fra
 | `--up-axis <s>` | `y` | Model up axis: `y` (Unity-style) or `z` (Unreal-style) |
 | `--in-place` | off | Remove root motion: keep the character centred |
 | `--check-root-motion` | off | Report root motion in the animation, then exit (no render) |
-| `--equip <path>` | — | Equipment manifest JSON: attach weapons/armor to the skeleton (Unreal sockets / master pose) |
+| `--equip <path>` | — | Equipment manifest JSON: attach weapons/armor to the skeleton (Unreal sockets / master pose). Bone names match tolerantly (case/namespace/separator-insensitive), so `"righthand"` binds to `mixamorig:RightHand`. |
+| `--list-bones` | off | Dump the skeleton/node tree with equipment-relevant bones flagged, then exit (the CLI analogue of an engine's bone-picker dropdown) |
 | `--verbose` | off | Print per-frame progress |
 
 ## Camera & coordinate system
@@ -128,6 +129,11 @@ Two modes are supported, matching how the engines split equipment:
   Relative Rotation in an editor. The whole `offset` object is optional (defaults: no translation,
   no rotation, scale 1).
 - Socket mode requires `socketBone`; master-pose mode does not (it binds by bone name).
+- **Bone names match tolerantly**: casing, word separators (`_`, `-`, `.`), and namespace/path prefixes
+  (`mixamorig:`, `Armature|`) are ignored. So `"righthand"`, `"Right_Hand"`, and `"RightHand"` all
+  bind to `mixamorig:RightHand`. An ambiguous name (e.g. `"hand"` matching both hands) is rejected —
+  supply a more specific name, or run `--list-bones` to see the exact names. Not-found errors list the
+  closest candidates.
 
 ```powershell
 ./bin/pixelsprite.exe --input hero.fbx --anim walk.fbx --equip equipment.json --directions 8

@@ -70,6 +70,8 @@ internal static class Program
             "--in-place", "Remove root motion: hold the root/hips horizontal translation so the character stays centered.");
         var checkRootMotionOption = new Option<bool>(
             "--check-root-motion", "Report whether the animation has root motion, then exit without rendering.");
+        var listBonesOption = new Option<bool>(
+            "--list-bones", "Dump the skeleton/node tree with equipment-relevant bones flagged, then exit without rendering.");
         var equipOption = new Option<string?>(
             "--equip", "Equipment manifest JSON (Unreal socket / master-pose attachments: weapons, armor).");
 
@@ -101,6 +103,7 @@ internal static class Program
         rootCommand.AddOption(verboseOption);
         rootCommand.AddOption(inPlaceOption);
         rootCommand.AddOption(checkRootMotionOption);
+        rootCommand.AddOption(listBonesOption);
         rootCommand.AddOption(equipOption);
 
         rootCommand.SetHandler((InvocationContext ctx) =>
@@ -134,6 +137,14 @@ internal static class Program
                 if (parsed.GetValueForOption(checkRootMotionOption))
                 {
                     Console.WriteLine(new RenderJob().CheckRootMotion(renderOpts));
+                    ctx.ExitCode = 0;
+                    return;
+                }
+
+                // --list-bones: dump the skeleton and exit without rendering.
+                if (parsed.GetValueForOption(listBonesOption))
+                {
+                    Console.WriteLine(new RenderJob().ListBones(renderOpts));
                     ctx.ExitCode = 0;
                     return;
                 }

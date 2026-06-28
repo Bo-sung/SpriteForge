@@ -630,12 +630,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
         else
         {
-            // Socket (weapon): place the mesh rigidly at the socket's world transform.
-            if (string.IsNullOrEmpty(att.SocketBone)
-                || !characterNodeGlobals.TryGetValue(att.SocketBone!, out Matrix4x4 boneGlobal))
+            // Socket (weapon): place the mesh rigidly at the socket's world transform. The bone name is
+            // resolved tolerantly (case/namespace/separator-insensitive) so a manifest can say
+            // "righthand" and bind to "mixamorig:RightHand". An exact match is tried first.
+            string? resolved = BoneMatcher.Resolve(characterNodeGlobals.Keys, att.SocketBone);
+            if (resolved is null || !characterNodeGlobals.TryGetValue(resolved, out Matrix4x4 boneGlobal))
             {
+                IReadOnlyList<string> suggestions = BoneMatcher.Suggest(characterNodeGlobals.Keys, att.SocketBone);
+                string hint = suggestions.Count > 0
+                    ? " Did you mean one of: " + string.Join(", ", suggestions.Select(n => $"'{n}'")) + "?"
+                    : " Use --list-bones to dump the skeleton.";
                 throw new InvalidOperationException(
-                    $"Attachment '{att.Name}': socket bone '{att.SocketBone}' not found on the character skeleton.");
+                    $"Attachment '{att.Name}': socket bone '{att.SocketBone}' not found on the character skeleton.{hint}");
             }
 
             Matrix4x4 offset = SocketTransform.ToMatrix(att.OffsetPosition, att.OffsetRotation, att.OffsetScale);

@@ -235,6 +235,44 @@ public sealed class RenderJob
         }
     }
 
+    /// <summary>
+    /// Loads the input model and returns a dump of its skeleton/node tree (the CLI analogue of an
+    /// engine's bone-picker dropdown), with equipment-relevant sites flagged inline. Used by
+    /// <c>--list-bones</c>; does not render.
+    /// </summary>
+    public unsafe string ListBones(RenderOptions renderOpts)
+    {
+        ArgumentNullException.ThrowIfNull(renderOpts);
+
+        if (!System.IO.File.Exists(renderOpts.Input))
+        {
+            throw new FileNotFoundException($"Input model not found: {renderOpts.Input}", renderOpts.Input);
+        }
+
+        var assimp = AssimpApi.GetApi();
+        Scene* scene = null;
+        try
+        {
+            // Bones are part of the node hierarchy; we don't need triangulation or skinning here.
+            scene = assimp.ImportFile(renderOpts.Input, 0);
+            if (scene is null)
+            {
+                throw new InvalidOperationException($"Failed to load '{renderOpts.Input}': {assimp.GetErrorStringS()}");
+            }
+
+            return $"{System.IO.Path.GetFileName(renderOpts.Input)}: {BoneReporter.Report(*scene)}";
+        }
+        finally
+        {
+            if (scene is not null)
+            {
+                assimp.FreeScene(scene);
+            }
+
+            assimp.Dispose();
+        }
+    }
+
     /// <summary>Formats a one-line root-motion summary.</summary>
     private static string DescribeRootMotion(RootMotionInfo rm, bool inPlace)
     {

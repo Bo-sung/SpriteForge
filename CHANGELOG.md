@@ -18,10 +18,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
     body-fitting gear (armor, helmets).
   - Manifest `file` paths resolve relative to the manifest directory and are verified
     at load time; `offset.rotation` is in degrees.
+  - **Tolerant bone-name matching** (`BoneMatcher`): socket-bone names match
+    case/separator/namespace-insensitively, so `"righthand"` binds to
+    `mixamorig:RightHand`. Ambiguous matches (e.g. `"hand"` for both hands) are
+    rejected with the candidate bones listed. This is the CLI analogue of an engine's
+    bone-picker dropdown, minus the dropdown.
+  - **`--list-bones`** (`BoneReporter`): dumps the skeleton/node tree with
+    equipment-relevant bones (hands/head/spine/forearms) flagged inline, so the
+    exact `socketBone` name is one command away.
 - New types: `Attachment`, `EquipmentManifest`, `EquipmentManifestLoader`,
-  `SocketTransform`, `AttachmentScene`.
+  `SocketTransform`, `AttachmentScene`, `BoneMatcher`, `BoneReporter`.
 - New tests: `SocketTransformTests` (SRT order, socket/bone composition),
-  `EquipmentManifestLoaderTests` (parsing, path resolution, validation).
+  `EquipmentManifestLoaderTests` (parsing, path resolution, validation),
+  `BoneMatcherTests` (exact/normalized/suffix matching, ambiguity, suggestions).
 
 ### Fixed
 - **Static meshes no longer collapse to the origin** — `BuildMesh` previously ignored
