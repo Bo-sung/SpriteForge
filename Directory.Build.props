@@ -2,7 +2,7 @@
 
   <!-- Shared metadata/version for all PixelSprite projects. -->
   <PropertyGroup>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>PixelSprite CLI</Product>
     <Company>SpriteForge</Company>
     <Authors>서보성</Authors>
