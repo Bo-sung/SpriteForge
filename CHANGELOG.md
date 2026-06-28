@@ -3,6 +3,39 @@
 All notable changes to PixelSprite CLI are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-28
+
+### Fixed
+- **Renderer MVP transpose** — the model-view-projection matrix was uploaded in
+  the wrong order for System.Numerics' row-vector convention, so GLSL applied `M`
+  instead of `M^T`. Small/symmetric models still looked plausible, but real Mixamo
+  rigs (large, asymmetric) collapsed into a "bowtie" of stretched triangles. The
+  matrix is now uploaded correctly and complex rigs render properly.
+
+### Added
+- **Root-motion detection** — `RootMotion.Analyze` finds the root/hips channel with
+  the most horizontal travel and reports its distance. `--check-root-motion` prints
+  the report and exits without rendering; `--in-place` pins the root node's XZ
+  translation to its start so the character stays centred (vertical bob kept).
+- **Engine-aligned camera coordinate system** — a spherical camera in a Y-up
+  (Unity-style) frame by default, or Z-up (Unreal-style) via `--up-axis z`. New
+  controls: `--cam-yaw` (base azimuth/facing for direction 0), `--cam-distance`
+  (explicit camera distance, 0 = auto), and `--cam-target` (look-at pan offset).
+- **Diffuse texture sampling** — meshes carry UVs and each material's diffuse
+  texture is loaded and sampled in the shader, so characters render with their
+  actual skins. Embedded textures (e.g. Mixamo FBX) are matched by file name and
+  decoded with SkiaSharp; external files are loaded best-effort. Meshes without a
+  diffuse texture fall back to the material/vertex color.
+
+### Changed
+- **Directions render by rotating the model** — the camera and light now stay fixed
+  at the front and the model rotates about its vertical centre axis per direction.
+  This gives consistent screen-space lighting and rotation-invariant framing across
+  directions, replacing the previous camera orbit.
+- **Per-clip fixed framing** — camera framing is computed once from the union of the
+  whole clip's bounds and reused for every frame and direction, removing
+  frame-to-frame scale jitter and making `--in-place` visually meaningful.
+
 ## [1.0.0] - 2026-06-27
 
 First release. A Windows-first .NET 8 CLI that renders a rigged FBX/GLB model from
