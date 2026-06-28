@@ -173,7 +173,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
         // fixed at the front. This keeps framing and screen-space lighting identical across directions
         // (the standard directional-sprite convention) instead of orbiting the camera around the model.
-        float yawRad = yaw * MathF.PI / 180f;
+        // Direction angle plus the base --cam-yaw offset (the facing of direction 0).
+        float yawRad = (yaw + opts.CamYaw) * MathF.PI / 180f;
         Matrix4x4 model = axisFix
             * Matrix4x4.CreateTranslation(-bounds.Center)
             * Matrix4x4.CreateRotationY(yawRad)
@@ -704,14 +705,19 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         float yawRad = yaw * MathF.PI / 180f;
         float pitchRad = pitch * MathF.PI / 180f;
 
-        // Orbit the camera around the model center at a distance derived from the bounding radius.
-        float distance = bounds.Radius / MathF.Max(opts.CamZoom, 1e-3f) * 2.6f;
+        // Camera distance: explicit --cam-distance override, else derived from the bounding radius and zoom.
+        float distance = opts.CamDistance > 0f
+            ? opts.CamDistance
+            : bounds.Radius / MathF.Max(opts.CamZoom, 1e-3f) * 2.6f;
+
+        // Look-at target: the model centre plus the --cam-target pan offset.
+        Vector3 target = bounds.Center + opts.CamTarget;
         var dir = new Vector3(
             MathF.Cos(pitchRad) * MathF.Sin(yawRad),
             MathF.Sin(pitchRad),
             MathF.Cos(pitchRad) * MathF.Cos(yawRad));
-        Vector3 eye = bounds.Center + (dir * distance);
-        Matrix4x4 view = Matrix4x4.CreateLookAt(eye, bounds.Center, Vector3.UnitY);
+        Vector3 eye = target + (dir * distance);
+        Matrix4x4 view = Matrix4x4.CreateLookAt(eye, target, Vector3.UnitY);
 
         float near = MathF.Max(distance - (bounds.Radius * 2f), 0.01f);
         float far = distance + (bounds.Radius * 2f);

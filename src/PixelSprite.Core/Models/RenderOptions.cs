@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace PixelSprite.Core.Models;
 
 /// <summary>
@@ -44,6 +46,24 @@ public sealed class RenderOptions
 
     /// <summary>Camera zoom factor; values above 1 zoom in. Default 1.0.</summary>
     public float CamZoom { get; init; } = 1.0f;
+
+    /// <summary>
+    /// Base azimuth offset in degrees applied to every direction, i.e. the facing of direction 0
+    /// about the up axis. Lets you align direction 0 with an engine's expected facing. Default 0.
+    /// </summary>
+    public float CamYaw { get; init; }
+
+    /// <summary>
+    /// Explicit camera distance in model units. 0 uses an automatic distance from the bounding sphere
+    /// and <see cref="CamZoom"/>. Default 0.
+    /// </summary>
+    public float CamDistance { get; init; }
+
+    /// <summary>
+    /// Look-at offset from the model centre, in the framing (Y-up) frame, used to pan the subject within
+    /// the frame (e.g. (0, 50, 0) frames higher). Default zero.
+    /// </summary>
+    public Vector3 CamTarget { get; init; }
 
     /// <summary>Use an orthographic projection instead of perspective. Default false.</summary>
     public bool Ortho { get; init; }
