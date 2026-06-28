@@ -43,6 +43,10 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
     private bool _disposed;
 
+    // Root-motion analysis is cached: a renderer instance processes a single animation per run.
+    private bool _rootMotionComputed;
+    private RootMotionInfo _rootMotion;
+
     private const string VertexShaderSource =
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
@@ -156,7 +160,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             : Matrix4x4.Identity;
 
         // Compute scene bounds (in corrected space) to frame the camera.
-        var meshes = ExtractMeshes(scene, animationScene, animIndex, time);
+        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace);
         Bounds bounds = ComputeBounds(meshes, axisFix);
 
         // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
@@ -351,7 +355,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
     /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
     /// </summary>
-    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time)
+    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
     {
         if (scene.MRootNode is null || scene.MNumMeshes == 0)
         {
@@ -360,7 +364,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         // Global transform per node, with animation applied where channels exist.
         var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
         AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
 
         var result = new List<CpuMesh>((int)scene.MNumMeshes);
@@ -378,7 +382,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         return result.ToArray();
     }
 
-    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time)
+    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
     {
         if (animIndex < 0 || animIndex >= scene.MNumAnimations || scene.MAnimations is null)
         {
@@ -409,7 +413,30 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             samplers[name] = NodeAnimSampler.Sample(channel, animTick);
         }
 
+        // Strip root motion: pin the root/hips node's horizontal translation to its start position so
+        // the character stays centered (the vertical bob is preserved).
+        if (inPlace)
+        {
+            RootMotionInfo rm = GetRootMotion(anim);
+            if (rm.HasMotion && samplers.TryGetValue(rm.Node, out NodeAnimSampler rootSampler))
+            {
+                samplers[rm.Node] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
+            }
+        }
+
         return samplers;
+    }
+
+    /// <summary>Lazily analyzes (and caches) the active animation's root motion; the clip never changes per run.</summary>
+    private RootMotionInfo GetRootMotion(Animation* anim)
+    {
+        if (!_rootMotionComputed)
+        {
+            _rootMotion = RootMotion.Analyze(anim);
+            _rootMotionComputed = true;
+        }
+
+        return _rootMotion;
     }
 
     private void AccumulateNodeTransforms(
@@ -691,6 +718,10 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         private readonly Vector3 _position = position;
         private readonly Quaternion _rotation = rotation;
         private readonly Vector3 _scale = scale;
+
+        /// <summary>Returns a copy with the horizontal (X, Z) translation pinned to the given anchor (root-motion strip).</summary>
+        public NodeAnimSampler StripHorizontal(float x, float z) =>
+            new(new Vector3(x, _position.Y, z), _rotation, _scale);
 
         public Matrix4x4 ToMatrix() =>
             Matrix4x4.CreateScale(_scale)

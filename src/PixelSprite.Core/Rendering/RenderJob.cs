@@ -86,6 +86,11 @@ public sealed class RenderJob
             string animName = ResolveAnimName(animSource, animIndex);
             int frameCount = ResolveFrameCount(animSource, animIndex, renderOpts);
 
+            if (animIndex >= 0)
+            {
+                progress?.Invoke(DescribeRootMotion(RootMotion.Analyze(animSource->MAnimations[animIndex]), renderOpts.InPlace));
+            }
+
             IReadOnlyList<float> yaws = DirectionScheduler.GetYaws(renderOpts.Directions);
 
             renderer = new OffscreenRenderer(renderOpts.RenderSize, renderOpts.RenderSize);
@@ -141,6 +146,58 @@ public sealed class RenderJob
 
             assimp.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Loads the animation source (the <c>--anim</c> file if given, else the input model) and returns a
+    /// human-readable root-motion report, without rendering. Used by <c>--check-root-motion</c>.
+    /// </summary>
+    public unsafe string CheckRootMotion(RenderOptions renderOpts)
+    {
+        ArgumentNullException.ThrowIfNull(renderOpts);
+
+        string animFile = !string.IsNullOrEmpty(renderOpts.Anim) ? renderOpts.Anim! : renderOpts.Input;
+        if (!System.IO.File.Exists(animFile))
+        {
+            throw new FileNotFoundException($"File not found: {animFile}", animFile);
+        }
+
+        var assimp = AssimpApi.GetApi();
+        Scene* scene = null;
+        try
+        {
+            scene = assimp.ImportFile(animFile, (uint)(PostProcessSteps.Triangulate | PostProcessSteps.LimitBoneWeights));
+            if (scene is null)
+            {
+                throw new InvalidOperationException($"Failed to load '{animFile}': {assimp.GetErrorStringS()}");
+            }
+
+            string label = System.IO.Path.GetFileName(animFile);
+            return scene->MNumAnimations == 0
+                ? $"{label}: no animation found."
+                : $"{label}: {DescribeRootMotion(RootMotion.Analyze(scene->MAnimations[0]), renderOpts.InPlace)}";
+        }
+        finally
+        {
+            if (scene is not null)
+            {
+                assimp.FreeScene(scene);
+            }
+
+            assimp.Dispose();
+        }
+    }
+
+    /// <summary>Formats a one-line root-motion summary.</summary>
+    private static string DescribeRootMotion(RootMotionInfo rm, bool inPlace)
+    {
+        if (!rm.HasMotion)
+        {
+            return $"root motion: none (in place; {rm.TravelXZ:F1} units of jitter)";
+        }
+
+        string action = inPlace ? "removed (--in-place)" : "pass --in-place to keep the character centered";
+        return $"root motion: detected on '{rm.Node}' (~{rm.TravelXZ:F0} units of horizontal travel); {action}";
     }
 
     /// <summary>Number of frames to sample: an explicit override, or the clip duration × fps, or 1 if static.</summary>

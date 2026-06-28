@@ -50,4 +50,10 @@ public sealed class RenderOptions
 
     /// <summary>Up axis of the source model. Default <see cref="UpAxis.Y"/>.</summary>
     public UpAxis UpAxis { get; init; } = UpAxis.Y;
+
+    /// <summary>
+    /// Remove root motion: hold the root/hips bone's horizontal translation so the character stays
+    /// centered (the vertical bob is kept). Default false.
+    /// </summary>
+    public bool InPlace { get; init; }
 }

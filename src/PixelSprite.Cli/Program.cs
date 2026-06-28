@@ -60,6 +60,10 @@ internal static class Program
             "--up-axis", () => "y", "Up axis: y | z.");
         var verboseOption = new Option<bool>(
             "--verbose", "Print per-frame progress.");
+        var inPlaceOption = new Option<bool>(
+            "--in-place", "Remove root motion: hold the root/hips horizontal translation so the character stays centered.");
+        var checkRootMotionOption = new Option<bool>(
+            "--check-root-motion", "Report whether the animation has root motion, then exit without rendering.");
 
         var rootCommand = new RootCommand("PixelSprite CLI - render a rigged model to pixel-art sprite sheets.");
 
@@ -84,6 +88,8 @@ internal static class Program
         rootCommand.AddOption(orthoOption);
         rootCommand.AddOption(upAxisOption);
         rootCommand.AddOption(verboseOption);
+        rootCommand.AddOption(inPlaceOption);
+        rootCommand.AddOption(checkRootMotionOption);
 
         rootCommand.SetHandler((InvocationContext ctx) =>
         {
@@ -106,7 +112,16 @@ internal static class Program
                     CamZoom = parsed.GetValueForOption(camZoomOption),
                     Ortho = parsed.GetValueForOption(orthoOption),
                     UpAxis = ParseUpAxis(parsed.GetValueForOption(upAxisOption)!),
+                    InPlace = parsed.GetValueForOption(inPlaceOption),
                 };
+
+                // --check-root-motion: report and exit without rendering.
+                if (parsed.GetValueForOption(checkRootMotionOption))
+                {
+                    Console.WriteLine(new RenderJob().CheckRootMotion(renderOpts));
+                    ctx.ExitCode = 0;
+                    return;
+                }
 
                 (bool morph, bool jaggy) = ParseCleanup(parsed.GetValueForOption(cleanupOption)!);
 
