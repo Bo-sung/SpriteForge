@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using PixelSprite.Core.Models;
 using PixelSprite.Core.PixelArt;
 using Silk.NET.Assimp;
@@ -81,6 +83,8 @@ public sealed class RenderJob
                 animSource = animScene;
                 progress?.Invoke($"retargeting animation from {System.IO.Path.GetFileName(renderOpts.Anim)} by bone name.");
             }
+
+            progress?.Invoke(DescribeAnimations(animSource, renderOpts));
 
             int animIndex = animSource->MNumAnimations > 0 ? 0 : -1;
             string animName = ResolveAnimName(animSource, animIndex);
@@ -218,6 +222,64 @@ public sealed class RenderJob
         double durationSeconds = anim->MDuration / ticksPerSecond;
         int count = (int)Math.Round(durationSeconds * opts.Fps);
         return Math.Max(1, count);
+    }
+
+    /// <summary>
+    /// A <c>--verbose</c> diagnostic dump of every animation clip in <paramref name="scene"/>: its name, raw
+    /// tick duration, raw ticks-per-second, the derived duration in seconds, and the frame count it would
+    /// sample at <paramref name="opts"/>.<see cref="RenderOptions.Fps"/>. These are the exact values behind
+    /// <see cref="ResolveFrameCount"/>, surfaced so tick-scale or wrong-clip issues are self-diagnosing
+    /// (e.g. a 45-frame/30fps clip that renders as 14 frames).
+    /// </summary>
+    private static unsafe string DescribeAnimations(Scene* scene, RenderOptions opts)
+    {
+        uint n = scene->MNumAnimations;
+        if (n == 0)
+        {
+            return "animations: none found (static mesh; a single frame will be rendered).";
+        }
+
+        var ci = CultureInfo.InvariantCulture;
+        var sb = new StringBuilder();
+        sb.Append("animations: ").Append(n.ToString(ci)).Append(" clip(s) found:");
+        for (uint i = 0; i < n; i++)
+        {
+            Animation* anim = scene->MAnimations[i];
+            if (anim is null)
+            {
+                sb.Append("\n  [").Append(i).Append("] <null animation>");
+                continue;
+            }
+
+            string name = anim->MName.AsString;
+            double durationTicks = anim->MDuration;
+            double tpsRaw = anim->MTicksPerSecond;
+            double tps = tpsRaw != 0 ? tpsRaw : 25.0;
+            double seconds = tps != 0 ? durationTicks / tps : 0.0;
+            int frames = Math.Max(1, (int)Math.Round(seconds * opts.Fps));
+            string tpsNote = tpsRaw == 0 ? " (raw 0 -> fallback 25)" : string.Empty;
+
+            sb.Append("\n  [").Append(i)
+              .Append("] name='").Append(string.IsNullOrEmpty(name) ? "(unnamed)" : name)
+              .Append("' channels=").Append(anim->MNumChannels)
+              .Append(" duration=").Append(durationTicks.ToString("0.###", ci))
+              .Append(" ticksPerSecond=").Append(tpsRaw.ToString("0.###", ci)).Append(tpsNote)
+              .Append(" -> ").Append(seconds.ToString("0.###", ci))
+              .Append("s -> ").Append(frames)
+              .Append(" frame(s) @ ").Append(opts.Fps).Append(" fps");
+        }
+
+        sb.Append("\n  selection: clip [0] (index is currently hard-coded to 0); ");
+        if (opts.Frames > 0)
+        {
+            sb.Append("--frames=").Append(opts.Frames).Append(" overrides the per-clip count above.");
+        }
+        else
+        {
+            sb.Append("frame count is derived from the selected clip's duration.");
+        }
+
+        return sb.ToString();
     }
 
     private static unsafe string ResolveAnimName(Scene* scene, int animIndex)

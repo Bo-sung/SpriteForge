@@ -257,7 +257,9 @@ internal static class Program
                     SheetRow = 0,
                 },
             },
-            Pivot = new PivotMetadata { X = 0.5f, Y = 0.0f },
+            // (0.5, 0.5): the root/hips bone is pinned to the frame centre (see OffscreenRenderer),
+            // so the sprite pivots at the body centre, not bottom-center.
+            Pivot = new PivotMetadata { X = 0.5f, Y = 0.5f },
         };
 
         MetadataWriter.Write(Path.Combine(outDir, $"{animName}_metadata.json"), metadata);

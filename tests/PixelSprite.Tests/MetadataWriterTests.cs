@@ -20,7 +20,7 @@ public sealed class MetadataWriterTests
             {
                 new() { Name = "Walk", FrameCount = 12, Fps = 12, SheetRow = 0 },
             },
-            Pivot = new PivotMetadata { X = 0.5f, Y = 0.0f },
+            Pivot = new PivotMetadata { X = 0.5f, Y = 0.5f },
         };
 
         string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
@@ -51,7 +51,7 @@ public sealed class MetadataWriterTests
             firstAnim.GetProperty("sheetRow").GetInt32().Should().Be(0);
 
             pivot.GetProperty("x").GetSingle().Should().Be(0.5f);
-            pivot.GetProperty("y").GetSingle().Should().Be(0.0f);
+            pivot.GetProperty("y").GetSingle().Should().Be(0.5f);
         }
         finally
         {

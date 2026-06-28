@@ -56,6 +56,10 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private bool _framingComputed;
     private Bounds _framing;
 
+    // The root/hips bone used as the screen-centre anchor is resolved once per run and reused.
+    private bool _rootBoneNameComputed;
+    private string? _rootBoneName;
+
     private const string VertexShaderSource =
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
@@ -177,12 +181,16 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
             : Matrix4x4.Identity;
 
-        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace);
+        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace, out Dictionary<string, Matrix4x4> nodeGlobals);
 
-        // Framing is computed once for the whole clip (the union of every frame's bounds) so the model
-        // keeps a constant scale and centre across all frames and directions, rather than re-framing
-        // each frame. With --in-place the union excludes root-motion travel, keeping the subject centered.
-        Bounds bounds = GetGlobalFraming(scene, animationScene, animIndex, opts);
+        // Whole-clip framing yields a constant zoom (radius) so scale never pops across the sheet. The
+        // CENTRE is re-anchored on THIS frame's root/hips bone position so the character's body stays
+        // pinned to screen centre across every frame and direction (no swimming) — the game-sprite
+        // convention. With --in-place the root's horizontal travel is already pinned, so this also kills
+        // the residual vertical/offset drift. Falls back to the clip's AABB centre for static props.
+        Bounds framing = GetGlobalFraming(scene, animationScene, animIndex, opts);
+        Vector3 anchor = GetRootWorldPosition(scene, animationScene, animIndex, nodeGlobals, axisFix) ?? framing.Center;
+        Bounds bounds = new Bounds(anchor, framing.Radius);
 
         // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
         // fixed at the front. This keeps framing and screen-space lighting identical across directions
@@ -393,16 +401,24 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
     /// </summary>
     private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
+        => ExtractMeshes(scene, animScene, animIndex, time, inPlace, out _);
+
+    /// <summary>
+    /// Extracts every mesh as skinned, triangulated CPU geometry for the given animation time, and also
+    /// returns the per-node global transforms used to build it (reused for root-bone lookups). Geometry
+    /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
+    /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
+    /// </summary>
+    private CpuMesh[] ExtractMeshes(
+        Scene scene, Scene animScene, int animIndex, float time, bool inPlace,
+        out Dictionary<string, Matrix4x4> nodeGlobals)
     {
+        nodeGlobals = BuildNodeGlobals(scene, animScene, animIndex, time, inPlace);
+
         if (scene.MRootNode is null || scene.MNumMeshes == 0)
         {
             return Array.Empty<CpuMesh>();
         }
-
-        // Global transform per node, with animation applied where channels exist.
-        var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
-        AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
 
         var result = new List<CpuMesh>((int)scene.MNumMeshes);
         for (uint mi = 0; mi < scene.MNumMeshes; mi++)
@@ -417,6 +433,17 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
 
         return result.ToArray();
+    }
+
+    /// <summary>Per-node global transforms (hierarchy from <paramref name="scene"/>) with the animation at
+    /// <paramref name="time"/> applied where channels exist in <paramref name="animScene"/>.</summary>
+    private Dictionary<string, Matrix4x4> BuildNodeGlobals(
+        Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
+    {
+        var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
+        AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
+        return nodeGlobals;
     }
 
     private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
@@ -474,6 +501,115 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
 
         return _rootMotion;
+    }
+
+    /// <summary>
+    /// Resolves (and caches) the name of the bone to anchor at screen centre for game sprites: the
+    /// structural root/hips bone, found by name (e.g. Mixamo's <c>mixamorig:Hips</c>), falling back to
+    /// the bone with the most horizontal travel when no conventionally-named pelvis exists.
+    /// </summary>
+    private string? GetRootBoneName(Scene scene, Scene animScene, int animIndex)
+    {
+        if (_rootBoneNameComputed)
+        {
+            return _rootBoneName;
+        }
+
+        _rootBoneName = FindRootBoneName(scene);
+        if (string.IsNullOrEmpty(_rootBoneName)
+            && animIndex >= 0 && animIndex < animScene.MNumAnimations && animScene.MAnimations is not null)
+        {
+            _rootBoneName = GetRootMotion(animScene.MAnimations[animIndex]).Node;
+            if (string.IsNullOrEmpty(_rootBoneName))
+            {
+                _rootBoneName = null;
+            }
+        }
+
+        _rootBoneNameComputed = true;
+        return _rootBoneName;
+    }
+
+    /// <summary>Depth-first search for a pelvis/hips node by name, after stripping any namespace prefix.</summary>
+    private static unsafe string? FindRootBoneName(Scene scene)
+        => scene.MRootNode is null ? null : FindRootBoneNameRecursive(scene.MRootNode);
+
+    private static unsafe string? FindRootBoneNameRecursive(Node* node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (MatchPelvisName(node->MName.AsString) is { } direct)
+        {
+            return direct;
+        }
+
+        for (uint i = 0; i < node->MNumChildren; i++)
+        {
+            if (FindRootBoneNameRecursive(node->MChildren[i]) is { } child)
+            {
+                return child;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Returns <paramref name="name"/> when it names a pelvis/hips (e.g. "Hips", "mixamorig:Hips"); else null.</summary>
+    private static string? MatchPelvisName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
+        string lower = name.ToLowerInvariant();
+        int colon = lower.LastIndexOf(':');
+        if (colon >= 0)
+        {
+            lower = colon + 1 < lower.Length ? lower[(colon + 1)..] : string.Empty;
+        }
+
+        return lower.Contains("hip") || lower.Contains("pelvis") ? name : null;
+    }
+
+    /// <summary>
+    /// The root/hips bone's world position in the axis-corrected frame at <paramref name="time"/>, looked
+    /// up from already-computed <paramref name="nodeGlobals"/>. Null when no root bone is detectable.
+    /// </summary>
+    private Vector3? GetRootWorldPosition(
+        Scene scene, Scene animScene, int animIndex, Dictionary<string, Matrix4x4> nodeGlobals, Matrix4x4 axisFix)
+    {
+        string? bone = GetRootBoneName(scene, animScene, animIndex);
+        if (string.IsNullOrEmpty(bone) || !nodeGlobals.TryGetValue(bone, out Matrix4x4 global))
+        {
+            return null;
+        }
+
+        return Vector3.Transform(global.Translation, axisFix);
+    }
+
+    /// <summary>Farthest any vertex of <paramref name="meshes"/> lies from <paramref name="root"/>, in the axis-corrected frame.</summary>
+    private static float MaxVertexDistance(CpuMesh[] meshes, Matrix4x4 axisFix, Vector3 root)
+    {
+        float max = 0f;
+        foreach (CpuMesh mesh in meshes)
+        {
+            for (int i = 0; i < mesh.Vertices.Length; i += 11)
+            {
+                var p = new Vector3(mesh.Vertices[i], mesh.Vertices[i + 1], mesh.Vertices[i + 2]);
+                p = Vector3.Transform(p, axisFix);
+                float d = (p - root).Length();
+                if (d > max)
+                {
+                    max = d;
+                }
+            }
+        }
+
+        return max;
     }
 
     private void AccumulateNodeTransforms(
@@ -807,9 +943,11 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     }
 
     /// <summary>
-    /// Computes a single camera framing for the entire clip by sampling the animation and unioning each
-    /// sampled frame's axis-aligned bounds. Cached after the first call. A static model (no animation)
-    /// samples only its single pose. With <c>--in-place</c> the samples exclude root-motion travel.
+    /// Computes a single constant zoom (radius) for the whole clip so scale never pops across the sheet.
+    /// The radius is sized to the farthest any vertex reaches from the root/hips bone (so nothing clips
+    /// once the camera is centred on the root); it falls back to the AABB half-diagonal when no root bone
+    /// is detectable. The centre is re-anchored per frame in <see cref="RenderFrame"/>. Cached after the
+    /// first call. A static model (no animation) samples only its single pose.
     /// </summary>
     private Bounds GetGlobalFraming(Scene scene, Scene animScene, int animIndex, RenderOptions opts)
     {
@@ -825,28 +963,40 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
         bool any = false;
+        float maxDistFromRoot = 0f;
 
         int samples = animIndex >= 0 ? 24 : 1;
         double durationSeconds = GetClipSeconds(animScene, animIndex);
         for (int s = 0; s < samples; s++)
         {
             float t = samples > 1 ? (float)(durationSeconds * s / (samples - 1)) : 0f;
-            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace);
+            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace, out Dictionary<string, Matrix4x4> nodeGlobals);
             (Vector3 mn, Vector3 mx, bool ok) = ComputeAabb(sampleMeshes, axisFix);
-            foreach (CpuMesh m in sampleMeshes)
-            {
-                m.Dispose();
-            }
-
             if (ok)
             {
                 min = Vector3.Min(min, mn);
                 max = Vector3.Max(max, mx);
                 any = true;
             }
+
+            // Track the farthest any vertex reaches from the root bone across the whole clip, so the zoom
+            // fits every pose once the camera is centred on the root (nothing is clipped).
+            if (GetRootWorldPosition(scene, animScene, animIndex, nodeGlobals, axisFix) is { } rootPos)
+            {
+                maxDistFromRoot = MathF.Max(maxDistFromRoot, MaxVertexDistance(sampleMeshes, axisFix, rootPos));
+            }
+
+            foreach (CpuMesh m in sampleMeshes)
+            {
+                m.Dispose();
+            }
         }
 
-        _framing = any ? BoundsFromAabb(min, max) : new Bounds(Vector3.Zero, 1f);
+        Bounds aabb = any ? BoundsFromAabb(min, max) : new Bounds(Vector3.Zero, 1f);
+        // Root-anchored framing for game sprites: keep a constant zoom, but size it to the farthest vertex
+        // from the root bone so no pose is clipped. The centre is re-anchored per frame by the caller.
+        float radius = maxDistFromRoot > 1e-3f ? maxDistFromRoot : aabb.Radius;
+        _framing = new Bounds(aabb.Center, radius);
         _framingComputed = true;
         return _framing;
     }

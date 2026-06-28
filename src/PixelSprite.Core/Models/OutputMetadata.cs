@@ -41,7 +41,8 @@ public sealed class AnimationMetadata
 }
 
 /// <summary>
-/// Normalized sprite pivot. <c>(0.5, 0.0)</c> is bottom-center by default.
+/// Normalized sprite pivot. <c>(0.5, 0.5)</c> is the default: the root/hips bone is anchored to
+/// the frame centre during rendering, so the body centre is the stable pivot point.
 /// </summary>
 public sealed class PivotMetadata
 {
@@ -49,5 +50,5 @@ public sealed class PivotMetadata
     public float X { get; init; } = 0.5f;
 
     /// <summary>Vertical pivot, normalized 0..1.</summary>
-    public float Y { get; init; }
+    public float Y { get; init; } = 0.5f;
 }
