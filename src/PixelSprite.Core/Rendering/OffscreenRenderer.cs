@@ -47,6 +47,10 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private bool _rootMotionComputed;
     private RootMotionInfo _rootMotion;
 
+    // The whole-clip framing is computed once (union of all sampled frames) and reused.
+    private bool _framingComputed;
+    private Bounds _framing;
+
     private const string VertexShaderSource =
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
@@ -159,9 +163,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
             : Matrix4x4.Identity;
 
-        // Compute scene bounds (in corrected space) to frame the camera.
         var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace);
-        Bounds bounds = ComputeBounds(meshes, axisFix);
+
+        // Framing is computed once for the whole clip (the union of every frame's bounds) so the model
+        // keeps a constant scale and centre across all frames and directions, rather than re-framing
+        // each frame. With --in-place the union excludes root-motion travel, keeping the subject centered.
+        Bounds bounds = GetGlobalFraming(scene, animationScene, animIndex, opts);
 
         // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
         // fixed at the front. This keeps framing and screen-space lighting identical across directions
@@ -606,7 +613,64 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
     }
 
-    private static Bounds ComputeBounds(CpuMesh[] meshes, Matrix4x4 axisFix)
+    /// <summary>
+    /// Computes a single camera framing for the entire clip by sampling the animation and unioning each
+    /// sampled frame's axis-aligned bounds. Cached after the first call. A static model (no animation)
+    /// samples only its single pose. With <c>--in-place</c> the samples exclude root-motion travel.
+    /// </summary>
+    private Bounds GetGlobalFraming(Scene scene, Scene animScene, int animIndex, RenderOptions opts)
+    {
+        if (_framingComputed)
+        {
+            return _framing;
+        }
+
+        Matrix4x4 axisFix = opts.UpAxis == UpAxis.Z
+            ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
+            : Matrix4x4.Identity;
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        bool any = false;
+
+        int samples = animIndex >= 0 ? 24 : 1;
+        double durationSeconds = GetClipSeconds(animScene, animIndex);
+        for (int s = 0; s < samples; s++)
+        {
+            float t = samples > 1 ? (float)(durationSeconds * s / (samples - 1)) : 0f;
+            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace);
+            (Vector3 mn, Vector3 mx, bool ok) = ComputeAabb(sampleMeshes, axisFix);
+            foreach (CpuMesh m in sampleMeshes)
+            {
+                m.Dispose();
+            }
+
+            if (ok)
+            {
+                min = Vector3.Min(min, mn);
+                max = Vector3.Max(max, mx);
+                any = true;
+            }
+        }
+
+        _framing = any ? BoundsFromAabb(min, max) : new Bounds(Vector3.Zero, 1f);
+        _framingComputed = true;
+        return _framing;
+    }
+
+    private static unsafe double GetClipSeconds(Scene animScene, int animIndex)
+    {
+        if (animIndex < 0 || animIndex >= animScene.MNumAnimations || animScene.MAnimations is null)
+        {
+            return 0.0;
+        }
+
+        Animation* anim = animScene.MAnimations[animIndex];
+        double ticksPerSecond = anim->MTicksPerSecond != 0 ? anim->MTicksPerSecond : 25.0;
+        return anim->MDuration / ticksPerSecond;
+    }
+
+    private static (Vector3 min, Vector3 max, bool any) ComputeAabb(CpuMesh[] meshes, Matrix4x4 axisFix)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
@@ -624,11 +688,11 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             }
         }
 
-        if (!any)
-        {
-            return new Bounds(Vector3.Zero, 1f);
-        }
+        return (min, max, any);
+    }
 
+    private static Bounds BoundsFromAabb(Vector3 min, Vector3 max)
+    {
         Vector3 center = (min + max) * 0.5f;
         float radius = MathF.Max((max - min).Length() * 0.5f, 1e-3f);
         return new Bounds(center, radius);
