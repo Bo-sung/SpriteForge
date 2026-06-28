@@ -158,18 +158,27 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         // Compute scene bounds (in corrected space) to frame the camera.
         var meshes = ExtractMeshes(scene, animationScene, animIndex, time);
         Bounds bounds = ComputeBounds(meshes, axisFix);
-        (Matrix4x4 view, Matrix4x4 proj) = BuildCamera(bounds, yaw, pitch, opts);
+
+        // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
+        // fixed at the front. This keeps framing and screen-space lighting identical across directions
+        // (the standard directional-sprite convention) instead of orbiting the camera around the model.
+        float yawRad = yaw * MathF.PI / 180f;
+        Matrix4x4 model = axisFix
+            * Matrix4x4.CreateTranslation(-bounds.Center)
+            * Matrix4x4.CreateRotationY(yawRad)
+            * Matrix4x4.CreateTranslation(bounds.Center);
+
+        // Fixed front camera (yaw 0). The bounding sphere is rotation-invariant, so framing is stable.
+        (Matrix4x4 view, Matrix4x4 proj) = BuildCamera(bounds, 0f, pitch, opts);
+        Matrix4x4 mvp = model * view * proj;
 
         _gl.UseProgram(_program);
         var lightDir = new Vector3(-0.4f, -0.7f, -0.6f);
         _gl.Uniform3(_uLightDir, lightDir.X, lightDir.Y, lightDir.Z);
-
         _gl.BindVertexArray(_vao);
 
         foreach (CpuMesh mesh in meshes)
         {
-            Matrix4x4 model = axisFix;
-            Matrix4x4 mvp = model * view * proj;
             // Per-mesh base tint resolved from the material's diffuse color (or a gray fallback).
             Vector3 baseColor = mesh.BaseColor;
             _gl.Uniform3(_uBaseColor, baseColor.X, baseColor.Y, baseColor.Z);
