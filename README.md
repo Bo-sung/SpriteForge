@@ -61,6 +61,7 @@ Render the committed sample cube from 4 directions and emit both a sheet and fra
 | `--in-place` | off | Remove root motion: keep the character centred |
 | `--check-root-motion` | off | Report root motion in the animation, then exit (no render) |
 | `--equip <path>` | — | Equipment manifest JSON: attach weapons/armor to the skeleton (Unreal sockets / master pose). Bone names match tolerantly (case/namespace/separator-insensitive), so `"righthand"` binds to `mixamorig:RightHand`. |
+| `--retarget <path>` | — | Retarget map JSON (joint mapping) for playing an animation authored for a different skeleton (e.g. Mixamo `mixamorig:*` -> Unreal `hand_r`). Rotation is transferred verbatim; optional `scaleTranslations` rescales root travel by the target/source bone-length ratio. |
 | `--list-bones` | off | Dump the skeleton/node tree with equipment-relevant bones flagged, then exit (the CLI analogue of an engine's bone-picker dropdown) |
 | `--verbose` | off | Print per-frame progress |
 
@@ -141,6 +142,42 @@ Two modes are supported, matching how the engines split equipment:
 
 Framing is computed across the character **and** every attachment, so weapons that extend beyond
 the body stay in frame. Comments and trailing commas are allowed in the manifest.
+
+## Animation retargeting (`--retarget`)
+
+Animations authored for one skeleton (e.g. Mixamo's `mixamorig:RightHand`) won't bind to a character
+built with a different rig (e.g. an Unreal-style `hand_r`) because the bone names don't match. A
+**retarget map** supplies the `sourceBone -> targetBone` table (the joint-mapping algorithm): the
+source bone's **rotation is transferred verbatim**, and (optionally) the **translation is rescaled**
+by the target/source bone-length ratio.
+
+```json
+{
+  "name": "Mixamo -> Unreal",
+  "scaleTranslations": false,
+  "bones": {
+    "mixamorig:Hips":         "pelvis",
+    "mixamorig:Spine":        "spine_01",
+    "mixamorig:RightArm":     "upperarm_r",
+    "mixamorig:RightHand":    "hand_r"
+  }
+}
+```
+
+```powershell
+./bin/pixelsprite.exe --input hero_unreal.fbx --anim mixamo_walk.fbx `
+  --retarget retarget.json --directions 8 --in-place
+```
+
+Map values resolve tolerantly through the same matcher as `--equip` (so `"hand_r"` binds whatever the
+exact bone name is). A bundled `samples/retarget_mixamo_to_unreal.json` maps the full Mixamo humanoid
+rig onto the Unreal-style skeleton used by assets like the RPGHeroSquad pack.
+
+> **Limitation (per the retargeting literature):** joint mapping carries rotations verbatim, so
+> differences in *rest pose* (T- vs A-pose) or proportions are not corrected. This is usually fine for
+> pixel-art sprites sampled at low resolution; for hero-quality results, bake the retarget in a DCC
+> tool (Unreal IK Retargeter, Blender's retargeting add-on) and export, then drop that file in as
+> `--anim` with no `--retarget`.
 
 ## Output
 

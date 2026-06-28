@@ -60,6 +60,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private bool _rootBoneNameComputed;
     private string? _rootBoneName;
 
+    // Retarget map (joint mapping) + its precomputed bone-length ratios, resolved once per run when a
+    // map is supplied. Null when no retarget is in effect (animation binds by verbatim bone name).
+    private RetargetMap? _retargetMap;
+    private IReadOnlyDictionary<string, float>? _retargetRatios;
+    private bool _retargetComputed;
+
     private const string VertexShaderSource =
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
@@ -198,6 +204,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         // Character node globals are evaluated once per frame and reused for character skinning, every
         // attachment's socket world matrix / master-pose skinning source, AND the root-bone anchor lookup.
+        ResolveRetarget(scene, animationScene, attachments);
         var nodeGlobals = BuildNodeGlobals(scene, animationScene, animIndex, time, opts.InPlace);
         var meshes = ExtractMeshes(scene, nodeGlobals);
 
@@ -428,9 +435,39 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private Dictionary<string, Matrix4x4> BuildNodeGlobals(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
     {
         var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace, scene, _retargetMap, _retargetRatios);
         AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
         return nodeGlobals;
+    }
+
+    // -- Retarget map (joint mapping) resolution ----------------------------------------------
+
+    /// <summary>
+    /// Resolves (and caches) the retarget map and its bone-length ratios for this run. The map itself
+    /// must be set via <see cref="SetRetargetMap"/> before the first render; the ratios are computed
+    /// here against the actual source (animation) and target (character) skeletons. No-op when no map.
+    /// </summary>
+    private unsafe void ResolveRetarget(Scene scene, Scene animScene, IReadOnlyList<AttachmentScene> attachments)
+    {
+        if (_retargetComputed || _retargetMap is null)
+        {
+            return;
+        }
+
+        if (_retargetMap.ScaleTranslations)
+        {
+            _retargetRatios = BoneLengthRatios.Build(&animScene, &scene, _retargetMap);
+        }
+
+        _retargetComputed = true;
+    }
+
+    /// <summary>Installs a retarget map for this renderer instance (joint-mapping retarget).</summary>
+    public void SetRetargetMap(RetargetMap? map)
+    {
+        _retargetMap = map;
+        _retargetRatios = null;
+        _retargetComputed = false;
     }
 
     // -- Root/hips bone screen-centre anchoring (game-sprite framing) --------------------------
@@ -686,6 +723,20 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     }
 
     private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
+        => BuildSamplers(scene, animIndex, time, inPlace, targetScene: null, retargetMap: null, ratios: null);
+
+    /// <summary>
+    /// Samples every animation channel at <paramref name="time"/>. When a <paramref name="retargetMap"/> is
+    /// supplied, each channel's bone name is remapped to the target skeleton (joint mapping) and — when
+    /// <see cref="RetargetMap.ScaleTranslations"/> is set — its translation is rescaled by the bone-length
+    /// ratio, implementing the classic retarget pseudocode:
+    /// <c>tgt.rotation = src.rotation; tgt.position = src.position * (tgt.length / src.length)</c>.
+    /// <paramref name="targetScene"/> provides the character's bone names (for fuzzy resolution of map
+    /// values) and is only needed when a map is active.
+    /// </summary>
+    private unsafe Dictionary<string, NodeAnimSampler>? BuildSamplers(
+        Scene scene, int animIndex, float time, bool inPlace,
+        Scene? targetScene, RetargetMap? retargetMap, IReadOnlyDictionary<string, float>? ratios)
     {
         if (animIndex < 0 || animIndex >= scene.MNumAnimations || scene.MAnimations is null)
         {
@@ -703,6 +754,16 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         double timeInTicks = time * ticksPerSecond;
         double animTick = durationTicks > 0 ? timeInTicks % durationTicks : 0.0;
 
+        // Resolve the target skeleton's bone names once for fuzzy lookups of the map values.
+        List<string>? targetBones = null;
+        if (retargetMap is not null && targetScene.HasValue)
+        {
+            Scene t = targetScene.Value;
+            targetBones = t.MRootNode is not null ? CollectNodeNames(t.MRootNode) : null;
+        }
+
+        IReadOnlyList<string> targetBoneNames = targetBones ?? (IReadOnlyList<string>)Array.Empty<string>();
+
         var samplers = new Dictionary<string, NodeAnimSampler>(StringComparer.Ordinal);
         for (uint c = 0; c < anim->MNumChannels; c++)
         {
@@ -712,22 +773,69 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 continue;
             }
 
-            string name = channel->MNodeName.AsString;
-            samplers[name] = NodeAnimSampler.Sample(channel, animTick);
+            string srcName = channel->MNodeName.AsString;
+            NodeAnimSampler sampler = NodeAnimSampler.Sample(channel, animTick);
+
+            // Joint-mapping retarget: remap the source bone name to the target skeleton, and (optionally)
+            // rescale the translation by the precomputed bone-length ratio. Rotation is transferred verbatim.
+            string tgtName = retargetMap is not null
+                ? RetargetMapper.ResolveTargetName(retargetMap, srcName, targetBoneNames)
+                : srcName;
+            if (tgtName != srcName || (retargetMap is not null && retargetMap.ScaleTranslations))
+            {
+                Vector3 pos = RetargetMapper.ScaleTranslation(retargetMap, sampler.Position, srcName, ratios);
+                sampler = sampler.WithPosition(pos);
+            }
+
+            samplers[tgtName] = sampler;
         }
 
         // Strip root motion: pin the root/hips node's horizontal translation to its start position so
-        // the character stays centered (the vertical bob is preserved).
+        // the character stays centered (the vertical bob is preserved). The strip is keyed by the
+        // (possibly remapped) root-bone name, so it works under retargeting too.
         if (inPlace)
         {
             RootMotionInfo rm = GetRootMotion(anim);
-            if (rm.HasMotion && samplers.TryGetValue(rm.Node, out NodeAnimSampler rootSampler))
+            if (rm.HasMotion)
             {
-                samplers[rm.Node] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
+                string rootKey = retargetMap is not null
+                    ? RetargetMapper.ResolveTargetName(retargetMap, rm.Node, targetBoneNames)
+                    : rm.Node;
+                if (samplers.TryGetValue(rootKey, out NodeAnimSampler rootSampler))
+                {
+                    samplers[rootKey] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
+                }
             }
         }
 
         return samplers;
+    }
+
+    /// <summary>Collects every node name in a tree (for fuzzy resolution of retarget map values).</summary>
+    private static unsafe List<string> CollectNodeNames(Node* root)
+    {
+        var names = new List<string>();
+        CollectNodeNamesRecursive(root, names);
+        return names;
+    }
+
+    private static unsafe void CollectNodeNamesRecursive(Node* node, List<string> names)
+    {
+        if (node is null)
+        {
+            return;
+        }
+
+        string name = node->MName.AsString;
+        if (!string.IsNullOrEmpty(name))
+        {
+            names.Add(name);
+        }
+
+        for (uint i = 0; i < node->MNumChildren; i++)
+        {
+            CollectNodeNamesRecursive(node->MChildren[i], names);
+        }
     }
 
     /// <summary>Lazily analyzes (and caches) the active animation's root motion; the clip never changes per run.</summary>
@@ -1312,9 +1420,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         private readonly Quaternion _rotation = rotation;
         private readonly Vector3 _scale = scale;
 
+        /// <summary>The sampled translation (exposed for retarget translation rescaling).</summary>
+        public Vector3 Position => _position;
+
         /// <summary>Returns a copy with the horizontal (X, Z) translation pinned to the given anchor (root-motion strip).</summary>
         public NodeAnimSampler StripHorizontal(float x, float z) =>
             new(new Vector3(x, _position.Y, z), _rotation, _scale);
+
+        /// <summary>Returns a copy with the translation replaced (retarget length rescaling).</summary>
+        public NodeAnimSampler WithPosition(Vector3 position) => new(position, _rotation, _scale);
 
         public Matrix4x4 ToMatrix() =>
             Matrix4x4.CreateScale(_scale)

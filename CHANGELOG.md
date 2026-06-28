@@ -26,11 +26,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - **`--list-bones`** (`BoneReporter`): dumps the skeleton/node tree with
     equipment-relevant bones (hands/head/spine/forearms) flagged inline, so the
     exact `socketBone` name is one command away.
+- **Animation retargeting** — `--retarget <map.json>` plays an animation authored for
+  one skeleton on a character built with a different one (e.g. Mixamo's
+  `mixamorig:*` onto an Unreal-style `hand_r` rig). Implements the joint-mapping
+  algorithm: the source bone's **rotation is transferred verbatim**, and (optionally,
+  via `scaleTranslations`) the **translation is rescaled** by the target/source
+  bone-length ratio (`BoneLengthRatios`). Map values resolve tolerantly through
+  `BoneMatcher` so `"hand_r"` binds whatever the exact target name is. Bundled
+  `samples/retarget_mixamo_to_unreal.json` maps the full Mixamo humanoid onto an
+  Unreal-style rig.
 - New types: `Attachment`, `EquipmentManifest`, `EquipmentManifestLoader`,
-  `SocketTransform`, `AttachmentScene`, `BoneMatcher`, `BoneReporter`.
+  `SocketTransform`, `AttachmentScene`, `BoneMatcher`, `BoneReporter`, `RetargetMap`,
+  `RetargetMapLoader`, `RetargetMapper`, `BoneLengthRatios`.
 - New tests: `SocketTransformTests` (SRT order, socket/bone composition),
   `EquipmentManifestLoaderTests` (parsing, path resolution, validation),
-  `BoneMatcherTests` (exact/normalized/suffix matching, ambiguity, suggestions).
+  `BoneMatcherTests` (exact/normalized/suffix matching, ambiguity, suggestions),
+  `RetargetMapperTests` (name resolution, translation rescaling),
+  `RetargetMapLoaderTests` (parsing, validation, lenient JSON).
 
 ### Fixed
 - **Static meshes no longer collapse to the origin** — `BuildMesh` previously ignored

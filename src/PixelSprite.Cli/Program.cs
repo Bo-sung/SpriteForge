@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using System.CommandLine.Invocation;
 using PixelSprite.Core.Models;
 using PixelSprite.Core.Packing;
@@ -74,6 +74,8 @@ internal static class Program
             "--list-bones", "Dump the skeleton/node tree with equipment-relevant bones flagged, then exit without rendering.");
         var equipOption = new Option<string?>(
             "--equip", "Equipment manifest JSON (Unreal socket / master-pose attachments: weapons, armor).");
+        var retargetOption = new Option<string?>(
+            "--retarget", "Retarget map JSON (joint mapping) for playing an animation authored for a different skeleton (e.g. Mixamo -> Unreal rig).");
 
         var rootCommand = new RootCommand("PixelSprite CLI - render a rigged model to pixel-art sprite sheets.");
 
@@ -105,6 +107,7 @@ internal static class Program
         rootCommand.AddOption(checkRootMotionOption);
         rootCommand.AddOption(listBonesOption);
         rootCommand.AddOption(equipOption);
+        rootCommand.AddOption(retargetOption);
 
         rootCommand.SetHandler((InvocationContext ctx) =>
         {
@@ -157,6 +160,14 @@ internal static class Program
                     equipment = EquipmentManifestLoader.Load(equipPath);
                 }
 
+                // --retarget: load the joint-mapping retarget map (rotation transfer + optional length rescale).
+                RetargetMap? retargetMap = null;
+                string? retargetPath = parsed.GetValueForOption(retargetOption);
+                if (!string.IsNullOrEmpty(retargetPath))
+                {
+                    retargetMap = RetargetMapLoader.Load(retargetPath);
+                }
+
                 (bool morph, bool jaggy) = ParseCleanup(parsed.GetValueForOption(cleanupOption)!);
 
                 var pixelOpts = new PixelArtOptions
@@ -178,7 +189,7 @@ internal static class Program
 
                 Action<string>? progress = verbose ? Console.WriteLine : null;
 
-                List<SpriteFrame> frames = new RenderJob().Execute(renderOpts, pixelOpts, equipment, progress).ToList();
+                List<SpriteFrame> frames = new RenderJob().Execute(renderOpts, pixelOpts, equipment, retargetMap, progress).ToList();
                 try
                 {
                     Save(frames, renderOpts, pixelOpts, outputOpts);

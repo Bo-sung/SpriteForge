@@ -41,11 +41,24 @@ public sealed class RenderJob
 
         // Materialized rather than lazily yielded: the Assimp scene is an unmanaged pointer and C#
         // iterators cannot carry pointer locals across yield boundaries. The frame set is small.
-        return RenderAll(renderOpts, pixelOpts, equipment, progress);
+        return RenderAll(renderOpts, pixelOpts, equipment, retargetMap: null, progress);
+    }
+
+    /// <summary>
+    /// Executes the full pipeline with an optional equipment manifest and an optional retarget map
+    /// (joint mapping) for playing an animation authored for a different skeleton.
+    /// </summary>
+    public IEnumerable<SpriteFrame> Execute(
+        RenderOptions renderOpts, PixelArtOptions pixelOpts, EquipmentManifest? equipment, RetargetMap? retargetMap, Action<string>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(renderOpts);
+        ArgumentNullException.ThrowIfNull(pixelOpts);
+
+        return RenderAll(renderOpts, pixelOpts, equipment, retargetMap, progress);
     }
 
     private static unsafe List<SpriteFrame> RenderAll(
-        RenderOptions renderOpts, PixelArtOptions pixelOpts, EquipmentManifest? equipment, Action<string>? progress)
+        RenderOptions renderOpts, PixelArtOptions pixelOpts, EquipmentManifest? equipment, RetargetMap? retargetMap, Action<string>? progress)
     {
         if (!System.IO.File.Exists(renderOpts.Input))
         {
@@ -136,6 +149,14 @@ public sealed class RenderJob
             }
 
             renderer = new OffscreenRenderer(renderOpts.RenderSize, renderOpts.RenderSize);
+            if (retargetMap is not null)
+            {
+                renderer.SetRetargetMap(retargetMap);
+                progress?.Invoke(
+                    retargetMap.ScaleTranslations
+                        ? $"retargeting animation via '{retargetMap.Name}' (joint mapping + length rescale)."
+                        : $"retargeting animation via '{retargetMap.Name}' (joint mapping, rotation-only).");
+            }
 
             for (int dir = 0; dir < yaws.Count; dir++)
             {
