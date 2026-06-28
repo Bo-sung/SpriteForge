@@ -54,12 +54,22 @@ internal static class Program
             "--cam-pitch", () => 26.5f, "Camera vertical angle in degrees.");
         var camZoomOption = new Option<float>(
             "--cam-zoom", () => 1.0f, "Zoom factor.");
+        var camYawOption = new Option<float>(
+            "--cam-yaw", () => 0f, "Base azimuth in degrees for direction 0 (rotates all directions about the up axis).");
+        var camDistanceOption = new Option<float>(
+            "--cam-distance", () => 0f, "Explicit camera distance in model units (0 = automatic).");
+        var camTargetOption = new Option<string?>(
+            "--cam-target", "Look-at pan offset from the model centre as 'x,y,z' (Y-up frame).");
         var orthoOption = new Option<bool>(
             "--ortho", "Orthographic projection.");
         var upAxisOption = new Option<string>(
             "--up-axis", () => "y", "Up axis: y | z.");
         var verboseOption = new Option<bool>(
             "--verbose", "Print per-frame progress.");
+        var inPlaceOption = new Option<bool>(
+            "--in-place", "Remove root motion: hold the root/hips horizontal translation so the character stays centered.");
+        var checkRootMotionOption = new Option<bool>(
+            "--check-root-motion", "Report whether the animation has root motion, then exit without rendering.");
 
         var rootCommand = new RootCommand("PixelSprite CLI - render a rigged model to pixel-art sprite sheets.");
 
@@ -81,9 +91,14 @@ internal static class Program
         rootCommand.AddOption(outOption);
         rootCommand.AddOption(camPitchOption);
         rootCommand.AddOption(camZoomOption);
+        rootCommand.AddOption(camYawOption);
+        rootCommand.AddOption(camDistanceOption);
+        rootCommand.AddOption(camTargetOption);
         rootCommand.AddOption(orthoOption);
         rootCommand.AddOption(upAxisOption);
         rootCommand.AddOption(verboseOption);
+        rootCommand.AddOption(inPlaceOption);
+        rootCommand.AddOption(checkRootMotionOption);
 
         rootCommand.SetHandler((InvocationContext ctx) =>
         {
@@ -104,9 +119,21 @@ internal static class Program
                     Frames = parsed.GetValueForOption(framesOption),
                     CamPitch = parsed.GetValueForOption(camPitchOption),
                     CamZoom = parsed.GetValueForOption(camZoomOption),
+                    CamYaw = parsed.GetValueForOption(camYawOption),
+                    CamDistance = parsed.GetValueForOption(camDistanceOption),
+                    CamTarget = ParseVec3(parsed.GetValueForOption(camTargetOption)),
                     Ortho = parsed.GetValueForOption(orthoOption),
                     UpAxis = ParseUpAxis(parsed.GetValueForOption(upAxisOption)!),
+                    InPlace = parsed.GetValueForOption(inPlaceOption),
                 };
+
+                // --check-root-motion: report and exit without rendering.
+                if (parsed.GetValueForOption(checkRootMotionOption))
+                {
+                    Console.WriteLine(new RenderJob().CheckRootMotion(renderOpts));
+                    ctx.ExitCode = 0;
+                    return;
+                }
 
                 (bool morph, bool jaggy) = ParseCleanup(parsed.GetValueForOption(cleanupOption)!);
 
@@ -279,4 +306,25 @@ internal static class Program
 
     /// <summary>Clamps an alpha-threshold integer into the 0-255 byte range.</summary>
     private static byte ToByte(int value) => (byte)Math.Clamp(value, 0, 255);
+
+    /// <summary>Parses a <c>--cam-target</c> "x,y,z" string into a vector; empty means no offset.</summary>
+    private static System.Numerics.Vector3 ParseVec3(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return System.Numerics.Vector3.Zero;
+        }
+
+        string[] parts = value.Split(',', StringSplitOptions.TrimEntries);
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts.Length != 3
+            || !float.TryParse(parts[0], ci, out float x)
+            || !float.TryParse(parts[1], ci, out float y)
+            || !float.TryParse(parts[2], ci, out float z))
+        {
+            throw new ArgumentException($"Invalid --cam-target '{value}'. Expected three numbers 'x,y,z'.");
+        }
+
+        return new System.Numerics.Vector3(x, y, z);
+    }
 }

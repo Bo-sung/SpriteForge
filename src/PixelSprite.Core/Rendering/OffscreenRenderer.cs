@@ -40,39 +40,59 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private readonly int _uModel;
     private readonly int _uLightDir;
     private readonly int _uBaseColor;
+    private readonly int _uHasTexture;
+    private readonly int _uTex;
+
+    // GL diffuse textures keyed by material index (0 = no texture); loaded lazily, deleted on dispose.
+    private readonly Dictionary<uint, uint> _materialTextures = new();
 
     private bool _disposed;
+
+    // Root-motion analysis is cached: a renderer instance processes a single animation per run.
+    private bool _rootMotionComputed;
+    private RootMotionInfo _rootMotion;
+
+    // The whole-clip framing is computed once (union of all sampled frames) and reused.
+    private bool _framingComputed;
+    private Bounds _framing;
 
     private const string VertexShaderSource =
         "#version 330 core\n" +
         "layout(location = 0) in vec3 aPos;\n" +
         "layout(location = 1) in vec3 aNormal;\n" +
         "layout(location = 2) in vec3 aColor;\n" +
+        "layout(location = 3) in vec2 aUv;\n" +
         "uniform mat4 uMvp;\n" +
         "uniform mat4 uModel;\n" +
         "out vec3 vNormal;\n" +
         "out vec3 vColor;\n" +
+        "out vec2 vUv;\n" +
         "void main()\n" +
         "{\n" +
         "    gl_Position = uMvp * vec4(aPos, 1.0);\n" +
         "    vNormal = mat3(uModel) * aNormal;\n" +
         "    vColor = aColor;\n" +
+        "    vUv = aUv;\n" +
         "}\n";
 
     private const string FragmentShaderSource =
         "#version 330 core\n" +
         "in vec3 vNormal;\n" +
         "in vec3 vColor;\n" +
+        "in vec2 vUv;\n" +
         "uniform vec3 uLightDir;\n" +
         "uniform vec3 uBaseColor;\n" +
+        "uniform sampler2D uTex;\n" +
+        "uniform int uHasTexture;\n" +
         "out vec4 FragColor;\n" +
         "void main()\n" +
         "{\n" +
         "    vec3 n = normalize(vNormal);\n" +
         "    float diff = max(dot(n, normalize(-uLightDir)), 0.0);\n" +
-        "    float ambient = 0.35;\n" +
-        "    // TODO: texture sampling\n" +
-        "    vec3 color = uBaseColor * vColor * (ambient + (1.0 - ambient) * diff);\n" +
+        "    float ambient = 0.6;\n" + // flatter light so albedo/texture reads clearly in the sprite
+        "    vec4 tex = texture(uTex, vec2(vUv.x, 1.0 - vUv.y));\n" +
+        "    vec3 albedo = (uHasTexture == 1) ? tex.rgb : (uBaseColor * vColor);\n" +
+        "    vec3 color = albedo * (ambient + (1.0 - ambient) * diff);\n" +
         "    FragColor = vec4(color, 1.0);\n" +
         "}\n";
 
@@ -114,6 +134,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _uModel = _gl.GetUniformLocation(_program, "uModel");
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uBaseColor = _gl.GetUniformLocation(_program, "uBaseColor");
+        _uHasTexture = _gl.GetUniformLocation(_program, "uHasTexture");
+        _uTex = _gl.GetUniformLocation(_program, "uTex");
 
         _vao = _gl.GenVertexArray();
         _vbo = _gl.GenBuffer();
@@ -155,24 +177,50 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
             : Matrix4x4.Identity;
 
-        // Compute scene bounds (in corrected space) to frame the camera.
-        var meshes = ExtractMeshes(scene, animationScene, animIndex, time);
-        Bounds bounds = ComputeBounds(meshes, axisFix);
-        (Matrix4x4 view, Matrix4x4 proj) = BuildCamera(bounds, yaw, pitch, opts);
+        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace);
+
+        // Framing is computed once for the whole clip (the union of every frame's bounds) so the model
+        // keeps a constant scale and centre across all frames and directions, rather than re-framing
+        // each frame. With --in-place the union excludes root-motion travel, keeping the subject centered.
+        Bounds bounds = GetGlobalFraming(scene, animationScene, animIndex, opts);
+
+        // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
+        // fixed at the front. This keeps framing and screen-space lighting identical across directions
+        // (the standard directional-sprite convention) instead of orbiting the camera around the model.
+        // Direction angle plus the base --cam-yaw offset (the facing of direction 0).
+        float yawRad = (yaw + opts.CamYaw) * MathF.PI / 180f;
+        Matrix4x4 model = axisFix
+            * Matrix4x4.CreateTranslation(-bounds.Center)
+            * Matrix4x4.CreateRotationY(yawRad)
+            * Matrix4x4.CreateTranslation(bounds.Center);
+
+        // Fixed front camera (yaw 0). The bounding sphere is rotation-invariant, so framing is stable.
+        (Matrix4x4 view, Matrix4x4 proj) = BuildCamera(bounds, 0f, pitch, opts);
+        Matrix4x4 mvp = model * view * proj;
 
         _gl.UseProgram(_program);
         var lightDir = new Vector3(-0.4f, -0.7f, -0.6f);
         _gl.Uniform3(_uLightDir, lightDir.X, lightDir.Y, lightDir.Z);
-
+        _gl.Uniform1(_uTex, 0); // diffuse sampler reads from texture unit 0
         _gl.BindVertexArray(_vao);
 
         foreach (CpuMesh mesh in meshes)
         {
-            Matrix4x4 model = axisFix;
-            Matrix4x4 mvp = model * view * proj;
             // Per-mesh base tint resolved from the material's diffuse color (or a gray fallback).
             Vector3 baseColor = mesh.BaseColor;
             _gl.Uniform3(_uBaseColor, baseColor.X, baseColor.Y, baseColor.Z);
+
+            if (mesh.TextureId != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, mesh.TextureId);
+                _gl.Uniform1(_uHasTexture, 1);
+            }
+            else
+            {
+                _gl.Uniform1(_uHasTexture, 0);
+            }
+
             UploadAndDraw(mesh, mvp, model);
         }
 
@@ -279,13 +327,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 BufferUsageARB.DynamicDraw);
         }
 
-        const uint stride = 9 * sizeof(float);
+        const uint stride = 11 * sizeof(float);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(1);
         _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
+        _gl.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, stride, (void*)(9 * sizeof(float)));
+        _gl.EnableVertexAttribArray(3);
 
         SetMatrix(_uMvp, mvp);
         SetMatrix(_uModel, model);
@@ -295,14 +345,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
     private void SetMatrix(int location, Matrix4x4 m)
     {
-        // System.Numerics.Matrix4x4 is row-major; GLSL expects column-major, so transpose on upload.
+        // System.Numerics uses the row-vector convention (clip = v_row * m), so the GLSL matrix must be
+        // m^T. We upload m's fields in System.Numerics order and let GL transpose on upload (transpose:
+        // true reinterprets these as rows, yielding m^T). NOTE: getting this wrong only distorts large,
+        // asymmetric models — small/symmetric ones still look plausible.
         Span<float> data = stackalloc float[16]
         {
-            m.M11, m.M21, m.M31, m.M41,
-            m.M12, m.M22, m.M32, m.M42,
-            m.M13, m.M23, m.M33, m.M43,
-            m.M14, m.M24, m.M34, m.M44,
+            m.M11, m.M12, m.M13, m.M14,
+            m.M21, m.M22, m.M23, m.M24,
+            m.M31, m.M32, m.M33, m.M34,
+            m.M41, m.M42, m.M43, m.M44,
         };
+        // Natural (row-major) order read as column-major yields m^T — the column-vector form GLSL needs.
         _gl.UniformMatrix4(location, 1, false, data);
     }
 
@@ -338,7 +392,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
     /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
     /// </summary>
-    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time)
+    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
     {
         if (scene.MRootNode is null || scene.MNumMeshes == 0)
         {
@@ -347,7 +401,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         // Global transform per node, with animation applied where channels exist.
         var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
         AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
 
         var result = new List<CpuMesh>((int)scene.MNumMeshes);
@@ -365,7 +419,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         return result.ToArray();
     }
 
-    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time)
+    private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
     {
         if (animIndex < 0 || animIndex >= scene.MNumAnimations || scene.MAnimations is null)
         {
@@ -396,7 +450,30 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             samplers[name] = NodeAnimSampler.Sample(channel, animTick);
         }
 
+        // Strip root motion: pin the root/hips node's horizontal translation to its start position so
+        // the character stays centered (the vertical bob is preserved).
+        if (inPlace)
+        {
+            RootMotionInfo rm = GetRootMotion(anim);
+            if (rm.HasMotion && samplers.TryGetValue(rm.Node, out NodeAnimSampler rootSampler))
+            {
+                samplers[rm.Node] = rootSampler.StripHorizontal(rm.ReferenceXZ.X, rm.ReferenceXZ.Y);
+            }
+        }
+
         return samplers;
+    }
+
+    /// <summary>Lazily analyzes (and caches) the active animation's root motion; the clip never changes per run.</summary>
+    private RootMotionInfo GetRootMotion(Animation* anim)
+    {
+        if (!_rootMotionComputed)
+        {
+            _rootMotion = RootMotion.Analyze(anim);
+            _rootMotionComputed = true;
+        }
+
+        return _rootMotion;
     }
 
     private void AccumulateNodeTransforms(
@@ -445,13 +522,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ApplySkinning(mesh, nodeGlobals, positions, normals);
         }
 
-        // Interleave position + normal + vertex color. Colors default to white so the per-mesh
-        // material base color carries the hue; the white attribute keeps the GLSL multiply a no-op.
-        // TODO: read actual per-vertex colors from mesh->MColors[0] when a model provides them.
-        var vertices = new float[vertexCount * 9];
+        // Optional UV set 0 for texture sampling (null when the mesh has no UVs).
+        Vector3* uvs = mesh->MTextureCoords[0];
+
+        // Interleave position + normal + vertex color (white) + uv. Vertex color stays white so the
+        // texture or material base color carries the hue.
+        var vertices = new float[vertexCount * 11];
         for (int i = 0; i < vertexCount; i++)
         {
-            int o = i * 9;
+            int o = i * 11;
             vertices[o + 0] = positions[i].X;
             vertices[o + 1] = positions[i].Y;
             vertices[o + 2] = positions[i].Z;
@@ -462,6 +541,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             vertices[o + 6] = 1f;
             vertices[o + 7] = 1f;
             vertices[o + 8] = 1f;
+            vertices[o + 9] = uvs != null ? uvs[i].X : 0f;
+            vertices[o + 10] = uvs != null ? uvs[i].Y : 0f;
         }
 
         // Triangulated indices (scene is expected to be imported with aiProcess_Triangulate).
@@ -480,7 +561,166 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
 
         Vector3 baseColor = GetDiffuseColor(scene, mesh->MMaterialIndex);
-        return new CpuMesh(vertices, indices.ToArray(), baseColor);
+        uint textureId = GetOrLoadDiffuseTexture(scene, mesh->MMaterialIndex);
+        return new CpuMesh(vertices, indices.ToArray(), baseColor, textureId);
+    }
+
+    /// <summary>Reads the diffuse/base-color texture path from a material's property list ("$tex.file").</summary>
+    private static string GetDiffuseTexturePath(Scene scene, uint materialIndex)
+    {
+        if (scene.MMaterials is null || materialIndex >= scene.MNumMaterials)
+        {
+            return string.Empty;
+        }
+
+        Material* mat = scene.MMaterials[materialIndex];
+        if (mat is null)
+        {
+            return string.Empty;
+        }
+
+        for (uint p = 0; p < mat->MNumProperties; p++)
+        {
+            MaterialProperty* prop = mat->MProperties[p];
+            if (prop is null || prop->MData is null)
+            {
+                continue;
+            }
+
+            if (prop->MKey.AsString == "$tex.file")
+            {
+                // The value is an aiString: 4-byte length prefix followed by the path bytes.
+                byte* d = prop->MData;
+                uint len = *(uint*)d;
+                if (len > 0 && len + 4 <= prop->MDataLength)
+                {
+                    return System.Text.Encoding.UTF8.GetString(d + 4, (int)len);
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Loads and caches a material's diffuse texture as a GL texture; returns 0 when there is none.</summary>
+    private uint GetOrLoadDiffuseTexture(Scene scene, uint materialIndex)
+    {
+        if (_materialTextures.TryGetValue(materialIndex, out uint cached))
+        {
+            return cached;
+        }
+
+        uint texId = 0;
+        using (SKBitmap? decoded = TryDecodeDiffuse(scene, materialIndex))
+        {
+            if (decoded is not null)
+            {
+                texId = UploadTexture(decoded);
+            }
+        }
+
+        _materialTextures[materialIndex] = texId;
+        return texId;
+    }
+
+    /// <summary>Decodes a material's diffuse image: embedded texture (matched by file name) or an external file.</summary>
+    private SKBitmap? TryDecodeDiffuse(Scene scene, uint materialIndex)
+    {
+        string path = GetDiffuseTexturePath(scene, materialIndex);
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        Silk.NET.Assimp.Texture* embedded = FindEmbeddedTexture(scene, path);
+        if (embedded is not null)
+        {
+            return DecodeEmbedded(embedded);
+        }
+
+        // External file on disk (absolute or relative to the working directory) — best effort.
+        return System.IO.File.Exists(path) ? SKBitmap.Decode(path) : null;
+    }
+
+    /// <summary>Finds an embedded texture matching a material path, by file name or Assimp's "*N" index form.</summary>
+    private static Silk.NET.Assimp.Texture* FindEmbeddedTexture(Scene scene, string path)
+    {
+        if (scene.MTextures is null || scene.MNumTextures == 0)
+        {
+            return null;
+        }
+
+        if (path.StartsWith('*') && uint.TryParse(path.AsSpan(1), out uint idx) && idx < scene.MNumTextures)
+        {
+            return scene.MTextures[idx];
+        }
+
+        string target = BaseName(path);
+        for (uint t = 0; t < scene.MNumTextures; t++)
+        {
+            Silk.NET.Assimp.Texture* et = scene.MTextures[t];
+            if (et is not null && string.Equals(BaseName(et->MFilename.AsString), target, StringComparison.OrdinalIgnoreCase))
+            {
+                return et;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Decodes an embedded texture: compressed bytes (height 0) via SkiaSharp, else raw BGRA texels.</summary>
+    private static SKBitmap? DecodeEmbedded(Silk.NET.Assimp.Texture* et)
+    {
+        if (et->MHeight == 0)
+        {
+            // Compressed image (PNG/JPG): MWidth is the byte length of the data at MPcData.
+            using SKData data = SKData.CreateCopy((IntPtr)et->PcData, (ulong)et->MWidth);
+            return SKBitmap.Decode(data);
+        }
+
+        int w = (int)et->MWidth, h = (int)et->MHeight;
+        var bmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        Texel* texels = et->PcData;
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                Texel t = texels[(y * w) + x];
+                bmp.SetPixel(x, y, new SKColor(t.R, t.G, t.B, t.A));
+            }
+        }
+
+        return bmp;
+    }
+
+    /// <summary>Uploads an SKBitmap as an RGBA8 GL texture with mipmaps; returns the texture id.</summary>
+    private uint UploadTexture(SKBitmap source)
+    {
+        SKBitmap rgba = source.ColorType == SKColorType.Rgba8888 ? source : source.Copy(SKColorType.Rgba8888);
+
+        uint tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        _gl.TexImage2D(
+            TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rgba.Width, (uint)rgba.Height, 0,
+            PixelFormat.Rgba, PixelType.UnsignedByte, (void*)rgba.GetPixels());
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.LinearMipmapLinear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.Repeat);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.Repeat);
+
+        if (!ReferenceEquals(rgba, source))
+        {
+            rgba.Dispose();
+        }
+
+        return tex;
+    }
+
+    private static string BaseName(string path)
+    {
+        int slash = path.LastIndexOfAny(new[] { '/', '\\' });
+        return slash >= 0 ? path[(slash + 1)..] : path;
     }
 
     /// <summary>Reads a material's diffuse color from its property list, falling back to neutral gray.</summary>
@@ -566,7 +806,64 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
     }
 
-    private static Bounds ComputeBounds(CpuMesh[] meshes, Matrix4x4 axisFix)
+    /// <summary>
+    /// Computes a single camera framing for the entire clip by sampling the animation and unioning each
+    /// sampled frame's axis-aligned bounds. Cached after the first call. A static model (no animation)
+    /// samples only its single pose. With <c>--in-place</c> the samples exclude root-motion travel.
+    /// </summary>
+    private Bounds GetGlobalFraming(Scene scene, Scene animScene, int animIndex, RenderOptions opts)
+    {
+        if (_framingComputed)
+        {
+            return _framing;
+        }
+
+        Matrix4x4 axisFix = opts.UpAxis == UpAxis.Z
+            ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
+            : Matrix4x4.Identity;
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        bool any = false;
+
+        int samples = animIndex >= 0 ? 24 : 1;
+        double durationSeconds = GetClipSeconds(animScene, animIndex);
+        for (int s = 0; s < samples; s++)
+        {
+            float t = samples > 1 ? (float)(durationSeconds * s / (samples - 1)) : 0f;
+            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace);
+            (Vector3 mn, Vector3 mx, bool ok) = ComputeAabb(sampleMeshes, axisFix);
+            foreach (CpuMesh m in sampleMeshes)
+            {
+                m.Dispose();
+            }
+
+            if (ok)
+            {
+                min = Vector3.Min(min, mn);
+                max = Vector3.Max(max, mx);
+                any = true;
+            }
+        }
+
+        _framing = any ? BoundsFromAabb(min, max) : new Bounds(Vector3.Zero, 1f);
+        _framingComputed = true;
+        return _framing;
+    }
+
+    private static unsafe double GetClipSeconds(Scene animScene, int animIndex)
+    {
+        if (animIndex < 0 || animIndex >= animScene.MNumAnimations || animScene.MAnimations is null)
+        {
+            return 0.0;
+        }
+
+        Animation* anim = animScene.MAnimations[animIndex];
+        double ticksPerSecond = anim->MTicksPerSecond != 0 ? anim->MTicksPerSecond : 25.0;
+        return anim->MDuration / ticksPerSecond;
+    }
+
+    private static (Vector3 min, Vector3 max, bool any) ComputeAabb(CpuMesh[] meshes, Matrix4x4 axisFix)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
@@ -574,7 +871,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         foreach (CpuMesh mesh in meshes)
         {
-            for (int i = 0; i < mesh.Vertices.Length; i += 9)
+            for (int i = 0; i < mesh.Vertices.Length; i += 11)
             {
                 var p = new Vector3(mesh.Vertices[i], mesh.Vertices[i + 1], mesh.Vertices[i + 2]);
                 p = Vector3.Transform(p, axisFix);
@@ -584,11 +881,11 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             }
         }
 
-        if (!any)
-        {
-            return new Bounds(Vector3.Zero, 1f);
-        }
+        return (min, max, any);
+    }
 
+    private static Bounds BoundsFromAabb(Vector3 min, Vector3 max)
+    {
         Vector3 center = (min + max) * 0.5f;
         float radius = MathF.Max((max - min).Length() * 0.5f, 1e-3f);
         return new Bounds(center, radius);
@@ -600,14 +897,19 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         float yawRad = yaw * MathF.PI / 180f;
         float pitchRad = pitch * MathF.PI / 180f;
 
-        // Orbit the camera around the model center at a distance derived from the bounding radius.
-        float distance = bounds.Radius / MathF.Max(opts.CamZoom, 1e-3f) * 2.6f;
+        // Camera distance: explicit --cam-distance override, else derived from the bounding radius and zoom.
+        float distance = opts.CamDistance > 0f
+            ? opts.CamDistance
+            : bounds.Radius / MathF.Max(opts.CamZoom, 1e-3f) * 2.6f;
+
+        // Look-at target: the model centre plus the --cam-target pan offset.
+        Vector3 target = bounds.Center + opts.CamTarget;
         var dir = new Vector3(
             MathF.Cos(pitchRad) * MathF.Sin(yawRad),
             MathF.Sin(pitchRad),
             MathF.Cos(pitchRad) * MathF.Cos(yawRad));
-        Vector3 eye = bounds.Center + (dir * distance);
-        Matrix4x4 view = Matrix4x4.CreateLookAt(eye, bounds.Center, Vector3.UnitY);
+        Vector3 eye = target + (dir * distance);
+        Matrix4x4 view = Matrix4x4.CreateLookAt(eye, target, Vector3.UnitY);
 
         float near = MathF.Max(distance - (bounds.Radius * 2f), 0.01f);
         float far = distance + (bounds.Radius * 2f);
@@ -647,6 +949,14 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _gl.DeleteFramebuffer(_fbo);
         _gl.DeleteTexture(_colorTex);
         _gl.DeleteRenderbuffer(_depthRbo);
+        foreach (uint tex in _materialTextures.Values)
+        {
+            if (tex != 0)
+            {
+                _gl.DeleteTexture(tex);
+            }
+        }
+
         _gl.Dispose();
         _window.Dispose();
     }
@@ -655,16 +965,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private readonly record struct Bounds(Vector3 Center, float Radius);
 
     /// <summary>
-    /// Skinned CPU geometry: interleaved [px,py,pz, nx,ny,nz, r,g,b] vertices, triangle indices,
-    /// and the mesh's material base color (used as a per-mesh tint uniform).
+    /// Skinned CPU geometry: interleaved [px,py,pz, nx,ny,nz, r,g,b, u,v] vertices, triangle indices,
+    /// the mesh's material base color, and its diffuse GL texture id (0 = none).
     /// </summary>
-    private sealed class CpuMesh(float[] vertices, uint[] indices, Vector3 baseColor) : IDisposable
+    private sealed class CpuMesh(float[] vertices, uint[] indices, Vector3 baseColor, uint textureId) : IDisposable
     {
         public float[] Vertices { get; } = vertices;
 
         public uint[] Indices { get; } = indices;
 
         public Vector3 BaseColor { get; } = baseColor;
+
+        public uint TextureId { get; } = textureId;
 
         public void Dispose()
         {
@@ -678,6 +990,10 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         private readonly Vector3 _position = position;
         private readonly Quaternion _rotation = rotation;
         private readonly Vector3 _scale = scale;
+
+        /// <summary>Returns a copy with the horizontal (X, Z) translation pinned to the given anchor (root-motion strip).</summary>
+        public NodeAnimSampler StripHorizontal(float x, float z) =>
+            new(new Vector3(x, _position.Y, z), _rotation, _scale);
 
         public Matrix4x4 ToMatrix() =>
             Matrix4x4.CreateScale(_scale)

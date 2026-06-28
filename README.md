@@ -51,11 +51,35 @@ Render the committed sample cube from 4 directions and emit both a sheet and fra
 | `--cleanup <list>` | `morph,jaggy` | Comma-separated cleanup steps: `morph`, `jaggy` |
 | `--output-mode <m>` | `sheet` | Output mode: `sheet`, `frames`, or `both` |
 | `--out <path>` | `./output` | Output directory |
-| `--cam-pitch <f>` | `26.5` | Camera vertical angle, in degrees |
-| `--cam-zoom <f>` | `1.0` | Zoom factor |
+| `--cam-pitch <f>` | `26.5` | Camera elevation (vertical angle), in degrees |
+| `--cam-zoom <f>` | `1.0` | Zoom factor (relative) |
+| `--cam-yaw <f>` | `0` | Base azimuth for direction 0, about the up axis |
+| `--cam-distance <f>` | `0` | Explicit camera distance in model units (`0` = automatic) |
+| `--cam-target <x,y,z>` | — | Look-at pan offset from the model centre (Y-up frame) |
 | `--ortho` | off | Use orthographic projection |
-| `--up-axis <s>` | `y` | Model up axis: `y` or `z` |
+| `--up-axis <s>` | `y` | Model up axis: `y` (Unity-style) or `z` (Unreal-style) |
+| `--in-place` | off | Remove root motion: keep the character centred |
+| `--check-root-motion` | off | Report root motion in the animation, then exit (no render) |
 | `--verbose` | off | Print per-frame progress |
+
+## Camera & coordinate system
+
+The model is framed in a **Y-up frame** (Unity-style) by default; pass `--up-axis z` for **Z-up**
+(Unreal-style) source models. Directions are rendered by **rotating the model** about its vertical
+centre axis while the camera and light stay fixed at the front — so screen-space lighting and framing
+stay consistent across every direction (the standard convention for directional sprite sheets).
+
+The camera is positioned with spherical controls around the subject:
+
+- **`--cam-pitch`** — elevation above the horizon (0 = eye level, 90 = top-down).
+- **`--cam-yaw`** — the facing of direction 0 about the up axis; rotates the whole direction set (e.g.
+  `--cam-yaw 45` for diagonal-facing sprites).
+- **`--cam-distance`** / **`--cam-zoom`** — absolute distance (model units) or a relative zoom factor.
+- **`--cam-target x,y,z`** — pan the look-at point off the model centre.
+
+Framing is computed once for the whole clip (so the subject keeps a constant scale across all frames
+and directions). For animations that travel (root motion), add `--in-place` to keep the character
+centred; use `--check-root-motion` to see how far a clip travels.
 
 ## Output
 
@@ -97,6 +121,9 @@ The sheet is laid out with **rows = directions** and **columns = frames** (width
 
 ## Notes / known limitations
 
-- The render path is verified for **static models** (e.g. the bundled `samples/cube.obj`).
-- **Skinned / animated models** and separate `--anim` retargeting (by bone name) are not yet fully validated/implemented.
-- **Image-texture shading is pending**: the current renderer shades using material diffuse color plus vertex color only — texture maps are not yet sampled.
+- The render path is verified end-to-end on **static, skinned, and animated** models — including real
+  Mixamo rigs (e.g. Y Bot / Paladin) with separate `--anim` retargeting by bone name.
+- **Diffuse textures are sampled** — embedded (matched by file name) or external files — so textured
+  characters render with their actual skins; models without a diffuse texture fall back to their
+  material color. Normal/specular/PBR maps are not used, and texture alpha is not applied as a cutout.
+  Lighting is intentionally flat (high ambient) so the texture reads clearly in the sprite.
