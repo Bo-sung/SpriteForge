@@ -60,6 +60,7 @@ Render the committed sample cube from 4 directions and emit both a sheet and fra
 | `--up-axis <s>` | `y` | Model up axis: `y` (Unity-style) or `z` (Unreal-style) |
 | `--in-place` | off | Remove root motion: keep the character centred |
 | `--check-root-motion` | off | Report root motion in the animation, then exit (no render) |
+| `--equip <path>` | — | Equipment manifest JSON: attach weapons/armor to the skeleton (Unreal sockets / master pose) |
 | `--verbose` | off | Print per-frame progress |
 
 ## Camera & coordinate system
@@ -80,6 +81,60 @@ The camera is positioned with spherical controls around the subject:
 Framing is computed once for the whole clip (so the subject keeps a constant scale across all frames
 and directions). For animations that travel (root motion), add `--in-place` to keep the character
 centred; use `--check-root-motion` to see how far a clip travels.
+
+## Equipment (weapons & armor)
+
+PixelSprite can equip attachments onto the character before rendering, modelled on **Unreal
+Engine's skeletal mesh sockets** and **`MasterPoseComponent`** (and Unity's parent-constraint /
+child-socket patterns). Attachments are declared in a JSON manifest passed via `--equip`.
+
+Two modes are supported, matching how the engines split equipment:
+
+- **Socket** (`useMasterPose: false`, the default) — for items held in the hand (swords, staves,
+  shields). The attachment is a static mesh placed rigidly at `offset × boneGlobal` every frame, so
+  it tracks the bone's animation with no skinning.
+- **Master pose** (`useMasterPose: true`) — for body-fitting gear (armor, gloves, helmets). The
+  attachment must be a skinned mesh that shares the character's bone names; it is skinned with the
+  *character's* per-frame bone poses (Unreal's `MasterPoseComponent` behaviour).
+
+### Manifest schema
+
+```json
+{
+  "attachments": [
+    {
+      "name": "sword",
+      "file": "./assets/sword.glb",
+      "socketBone": "Hand_R",
+      "offset": { "position": [0, 0, 0.05], "rotation": [0, 90, 0], "scale": 1.0 }
+    },
+    {
+      "name": "shield",
+      "file": "./assets/shield.glb",
+      "socketBone": "Forearm_L"
+    },
+    {
+      "name": "helmet",
+      "file": "./assets/helmet.glb",
+      "useMasterPose": true
+    }
+  ]
+}
+```
+
+- `file` is resolved relative to the **manifest's directory** (so a manifest and its assets travel
+  together) and verified to exist at load time.
+- `offset.rotation` is in **degrees**, Euler (yaw, pitch, roll) — exactly how you'd edit a socket's
+  Relative Rotation in an editor. The whole `offset` object is optional (defaults: no translation,
+  no rotation, scale 1).
+- Socket mode requires `socketBone`; master-pose mode does not (it binds by bone name).
+
+```powershell
+./bin/pixelsprite.exe --input hero.fbx --anim walk.fbx --equip equipment.json --directions 8
+```
+
+Framing is computed across the character **and** every attachment, so weapons that extend beyond
+the body stay in frame. Comments and trailing commas are allowed in the manifest.
 
 ## Output
 

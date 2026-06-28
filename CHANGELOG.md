@@ -3,6 +3,33 @@
 All notable changes to PixelSprite CLI are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-28
+
+### Added
+- **Equipment / attachment system** — weapons and armor can now be equipped onto the
+  character before rendering, modelled on Unreal Engine's skeletal-mesh sockets and
+  `MasterPoseComponent` (and Unity's parent-constraint / child-socket patterns).
+  - `--equip <manifest.json>` loads a JSON manifest of attachments.
+  - **Socket mode** (default): a static mesh placed rigidly at `offset × boneGlobal`
+    every frame, for items held in the hand (swords, shields). The mesh tracks the
+    bone with no skinning.
+  - **Master-pose mode** (`useMasterPose: true`): a skinned mesh sharing the
+    character's bone names, skinned with the character's per-frame bone poses, for
+    body-fitting gear (armor, helmets).
+  - Manifest `file` paths resolve relative to the manifest directory and are verified
+    at load time; `offset.rotation` is in degrees.
+- New types: `Attachment`, `EquipmentManifest`, `EquipmentManifestLoader`,
+  `SocketTransform`, `AttachmentScene`.
+- New tests: `SocketTransformTests` (SRT order, socket/bone composition),
+  `EquipmentManifestLoaderTests` (parsing, path resolution, validation).
+
+### Fixed
+- **Static meshes no longer collapse to the origin** — `BuildMesh` previously ignored
+  the owning node's global transform for unskinned meshes, so a weapon parented under a
+  hand bone (or any static prop in a multi-node scene) rendered at `(0,0,0)`. Static
+  meshes are now placed at their owning node's global transform, which is also the
+  foundation the socket-attachment feature builds on.
+
 ## [1.1.0] - 2026-06-28
 
 ### Fixed

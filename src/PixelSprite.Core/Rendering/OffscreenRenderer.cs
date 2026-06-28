@@ -154,17 +154,32 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     /// <param name="opts">Render options (zoom, projection, up axis).</param>
     /// <returns>A new bitmap; the caller owns and must dispose it.</returns>
     public SKBitmap RenderFrame(Scene scene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
-        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts);
+        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts, Array.Empty<AttachmentScene>());
+
+    /// <summary>
+    /// Renders one frame with equipment, using the embedded animation (no separate animation scene).
+    /// </summary>
+    public SKBitmap RenderFrame(Scene scene, int animIndex, float yaw, float pitch, float time, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
+        => RenderFrame(scene, scene, animIndex, yaw, pitch, time, opts, attachments);
+
+    /// <summary>
+    /// Renders one frame using an animation from <paramref name="animationScene"/> with no equipment.
+    /// Equivalent to passing an empty attachment list.
+    /// </summary>
+    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
+        => RenderFrame(scene, animationScene, animIndex, yaw, pitch, time, opts, Array.Empty<AttachmentScene>());
 
     /// <summary>
     /// Renders one frame using an animation taken from a SEPARATE scene (<paramref name="animationScene"/>),
-    /// retargeted onto <paramref name="scene"/>'s skeleton by matching node/bone names. Geometry and the
-    /// node hierarchy come from <paramref name="scene"/>; only animation channels are read from
+    /// retargeted onto <paramref name="scene"/>'s skeleton by matching node/bone names, with optional
+    /// equipment attachments (Unreal socket / master-pose) bound to the character's bones. Geometry and
+    /// the node hierarchy come from <paramref name="scene"/>; animation channels come from
     /// <paramref name="animationScene"/> (pass the same scene for both to use an embedded animation).
     /// </summary>
-    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts)
+    public SKBitmap RenderFrame(Scene scene, Scene animationScene, int animIndex, float yaw, float pitch, float time, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(attachments);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
@@ -177,12 +192,20 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ? Matrix4x4.CreateRotationX(-MathF.PI / 2f)
             : Matrix4x4.Identity;
 
-        var meshes = ExtractMeshes(scene, animationScene, animIndex, time, opts.InPlace);
+        // Character node globals are evaluated once per frame and reused for both character skinning
+        // and every attachment's socket world matrix / master-pose skinning source.
+        var nodeGlobals = EvaluateNodeGlobals(scene, animationScene, animIndex, time, opts.InPlace);
+        var meshes = ExtractMeshes(scene, nodeGlobals);
 
-        // Framing is computed once for the whole clip (the union of every frame's bounds) so the model
-        // keeps a constant scale and centre across all frames and directions, rather than re-framing
-        // each frame. With --in-place the union excludes root-motion travel, keeping the subject centered.
-        Bounds bounds = GetGlobalFraming(scene, animationScene, animIndex, opts);
+        foreach (AttachmentScene att in attachments)
+        {
+            meshes = AppendMeshes(meshes, ExtractAttachmentMeshes(att.Scene, att.Definition, nodeGlobals));
+        }
+
+        // Framing is computed once for the whole clip (the union of every frame's bounds, including any
+        // attachments) so the model keeps a constant scale and centre across all frames and directions,
+        // rather than re-framing each frame. With --in-place the union excludes root-motion travel.
+        Bounds bounds = GetGlobalFraming(scene, animationScene, animIndex, opts, attachments);
 
         // Each direction rotates the MODEL about its vertical centre axis; the camera and light stay
         // fixed at the front. This keeps framing and screen-space lighting identical across directions
@@ -388,21 +411,33 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     // -- Assimp scene extraction + CPU skinning ------------------------------------------------
 
     /// <summary>
-    /// Extracts every mesh as skinned, triangulated CPU geometry for the given animation time. Geometry
-    /// and the node hierarchy come from <paramref name="scene"/>; animation channels come from
-    /// <paramref name="animScene"/> (matched to nodes by name, enabling separate-file retargeting).
+    /// Evaluates the global transform of every node at <paramref name="time"/> (animation channels from
+    /// <paramref name="animScene"/>), with optional root-motion stripping. The returned map is the
+    /// "bone world matrix" table reused for character skinning and for equipment socket / master-pose math.
     /// </summary>
-    private CpuMesh[] ExtractMeshes(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
+    private Dictionary<string, Matrix4x4> EvaluateNodeGlobals(Scene scene, Scene animScene, int animIndex, float time, bool inPlace)
+    {
+        var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
+        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
+        AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
+        return nodeGlobals;
+    }
+
+    /// <summary>
+    /// Extracts every mesh as skinned, triangulated CPU geometry using the supplied per-node globals.
+    /// Static (unskinned) meshes are placed at their owning node's global transform — this is what lets
+    /// a weapon mesh parented under a hand bone (via socket) track the bone, and lets static props in a
+    /// multi-node scene sit correctly rather than collapsing to the origin.
+    /// </summary>
+    private CpuMesh[] ExtractMeshes(Scene scene, Dictionary<string, Matrix4x4> nodeGlobals)
     {
         if (scene.MRootNode is null || scene.MNumMeshes == 0)
         {
             return Array.Empty<CpuMesh>();
         }
 
-        // Global transform per node, with animation applied where channels exist.
-        var nodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
-        Dictionary<string, NodeAnimSampler>? samplers = BuildSamplers(animScene, animIndex, time, inPlace);
-        AccumulateNodeTransforms(scene.MRootNode, Matrix4x4.Identity, samplers, nodeGlobals);
+        var meshToNode = new Dictionary<uint, string>();
+        BuildMeshToNodeMap(scene.MRootNode, meshToNode);
 
         var result = new List<CpuMesh>((int)scene.MNumMeshes);
         for (uint mi = 0; mi < scene.MNumMeshes; mi++)
@@ -413,10 +448,114 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 continue;
             }
 
-            result.Add(BuildMesh(scene, mesh, nodeGlobals));
+            meshToNode.TryGetValue(mi, out string? ownerNodeName);
+            result.Add(BuildMesh(scene, mesh, nodeGlobals, ownerNodeName, Matrix4x4.Identity, forceStatic: false));
         }
 
         return result.ToArray();
+    }
+
+    /// <summary>Walks the node tree recording which node directly owns each scene mesh index.</summary>
+    private static void BuildMeshToNodeMap(Node* node, Dictionary<uint, string> output)
+    {
+        if (node is null)
+        {
+            return;
+        }
+
+        string name = node->MName.AsString;
+        for (uint i = 0; i < node->MNumMeshes; i++)
+        {
+            output[node->MMeshes[i]] = name;
+        }
+
+        for (uint i = 0; i < node->MNumChildren; i++)
+        {
+            BuildMeshToNodeMap(node->MChildren[i], output);
+        }
+    }
+
+    /// <summary>
+    /// Extracts an attachment's meshes and places them on the character. Socket mode treats the mesh as
+    /// rigid at <c>offset × boneGlobal</c> (Unreal's AttachToComponent formula); master-pose mode skins
+    /// it with the character's per-frame bone globals using the attachment's own offset matrices.
+    /// </summary>
+    private CpuMesh[] ExtractAttachmentMeshes(
+        Scene attScene, Attachment att, Dictionary<string, Matrix4x4> characterNodeGlobals)
+    {
+        if (attScene.MRootNode is null || attScene.MNumMeshes == 0)
+        {
+            return Array.Empty<CpuMesh>();
+        }
+
+        // The attachment's own node globals (bind pose — attachments carry no animation channels).
+        var attNodeGlobals = new Dictionary<string, Matrix4x4>(StringComparer.Ordinal);
+        AccumulateNodeTransforms(attScene.MRootNode, Matrix4x4.Identity, null, attNodeGlobals);
+
+        var meshToNode = new Dictionary<uint, string>();
+        BuildMeshToNodeMap(attScene.MRootNode, meshToNode);
+
+        Matrix4x4 rootTransform;
+        bool forceStatic;
+        Dictionary<string, Matrix4x4> skinningGlobals;
+
+        if (att.UseMasterPose)
+        {
+            // Master-pose (armour): skin with the character's bone poses; the attachment's own bone
+            // offset matrices are read per-bone inside BuildMesh. No socket root transform.
+            rootTransform = Matrix4x4.Identity;
+            forceStatic = false;
+            skinningGlobals = characterNodeGlobals;
+        }
+        else
+        {
+            // Socket (weapon): place the mesh rigidly at the socket's world transform.
+            if (string.IsNullOrEmpty(att.SocketBone)
+                || !characterNodeGlobals.TryGetValue(att.SocketBone!, out Matrix4x4 boneGlobal))
+            {
+                throw new InvalidOperationException(
+                    $"Attachment '{att.Name}': socket bone '{att.SocketBone}' not found on the character skeleton.");
+            }
+
+            Matrix4x4 offset = SocketTransform.ToMatrix(att.OffsetPosition, att.OffsetRotation, att.OffsetScale);
+            rootTransform = offset * boneGlobal; // row-vector: weapon local → offset → bone global
+            forceStatic = true; // rigid: ignore any bones in the attachment, position purely at the socket
+            skinningGlobals = attNodeGlobals;
+        }
+
+        var result = new List<CpuMesh>((int)attScene.MNumMeshes);
+        for (uint mi = 0; mi < attScene.MNumMeshes; mi++)
+        {
+            Mesh* mesh = attScene.MMeshes[mi];
+            if (mesh is null || mesh->MNumVertices == 0)
+            {
+                continue;
+            }
+
+            meshToNode.TryGetValue(mi, out string? ownerNodeName);
+            result.Add(BuildMesh(attScene, mesh, skinningGlobals, ownerNodeName, rootTransform, forceStatic));
+        }
+
+        return result.ToArray();
+    }
+
+    /// <summary>Concatenates two mesh arrays (avoids LINQ allocations in the per-frame hot path).</summary>
+    private static CpuMesh[] AppendMeshes(CpuMesh[] head, CpuMesh[] tail)
+    {
+        if (tail.Length == 0)
+        {
+            return head;
+        }
+
+        if (head.Length == 0)
+        {
+            return tail;
+        }
+
+        var combined = new CpuMesh[head.Length + tail.Length];
+        Array.Copy(head, combined, head.Length);
+        Array.Copy(tail, 0, combined, head.Length, tail.Length);
+        return combined;
     }
 
     private Dictionary<string, NodeAnimSampler>? BuildSamplers(Scene scene, int animIndex, float time, bool inPlace)
@@ -504,7 +643,9 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
     }
 
-    private CpuMesh BuildMesh(Scene scene, Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals)
+    private CpuMesh BuildMesh(
+        Scene scene, Mesh* mesh, Dictionary<string, Matrix4x4> nodeGlobals,
+        string? ownerNodeName, Matrix4x4 rootTransform, bool forceStatic)
     {
         int vertexCount = (int)mesh->MNumVertices;
         var positions = new Vector3[vertexCount];
@@ -516,10 +657,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             normals[i] = mesh->MNormals != null ? mesh->MNormals[i] : Vector3.UnitY;
         }
 
-        // Apply bone skinning when present, otherwise leave vertices in mesh space.
-        if (mesh->MNumBones > 0)
+        // Skinned meshes use bone offset × global. Static (or socket-rigid) meshes are placed at their
+        // owning node's global transform, optionally composed with an extra root (the socket matrix).
+        if (!forceStatic && mesh->MNumBones > 0)
         {
             ApplySkinning(mesh, nodeGlobals, positions, normals);
+        }
+        else
+        {
+            ApplyStaticTransform(positions, normals, nodeGlobals, ownerNodeName, rootTransform);
         }
 
         // Optional UV set 0 for texture sampling (null when the mesh has no UVs).
@@ -807,11 +953,39 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     }
 
     /// <summary>
+    /// Places a static mesh: <c>position' = v × (owningNodeGlobal × rootTransform)</c>.
+    /// <paramref name="rootTransform"/> is the socket world matrix for weapon attachments, or identity
+    /// for plain static scene meshes (so they sit at their node instead of collapsing to the origin).
+    /// </summary>
+    private static void ApplyStaticTransform(
+        Vector3[] positions, Vector3[] normals,
+        Dictionary<string, Matrix4x4> nodeGlobals, string? ownerNodeName, Matrix4x4 rootTransform)
+    {
+        Matrix4x4 nodeTransform = (ownerNodeName is not null && nodeGlobals.TryGetValue(ownerNodeName, out Matrix4x4 nt))
+            ? nt
+            : Matrix4x4.Identity;
+
+        Matrix4x4 full = nodeTransform * rootTransform;
+        if (full == Matrix4x4.Identity)
+        {
+            return; // common fast path: a rootless static mesh with no socket
+        }
+
+        Matrix4x4 normalMatrix = SocketTransform.WithoutTranslation(full);
+        for (int i = 0; i < positions.Length; i++)
+        {
+            positions[i] = Vector3.Transform(positions[i], full);
+            normals[i] = Vector3.TransformNormal(normals[i], normalMatrix);
+        }
+    }
+
+    /// <summary>
     /// Computes a single camera framing for the entire clip by sampling the animation and unioning each
     /// sampled frame's axis-aligned bounds. Cached after the first call. A static model (no animation)
     /// samples only its single pose. With <c>--in-place</c> the samples exclude root-motion travel.
     /// </summary>
-    private Bounds GetGlobalFraming(Scene scene, Scene animScene, int animIndex, RenderOptions opts)
+    private Bounds GetGlobalFraming(
+        Scene scene, Scene animScene, int animIndex, RenderOptions opts, IReadOnlyList<AttachmentScene> attachments)
     {
         if (_framingComputed)
         {
@@ -831,7 +1005,12 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         for (int s = 0; s < samples; s++)
         {
             float t = samples > 1 ? (float)(durationSeconds * s / (samples - 1)) : 0f;
-            CpuMesh[] sampleMeshes = ExtractMeshes(scene, animScene, animIndex, t, opts.InPlace);
+            var nodeGlobals = EvaluateNodeGlobals(scene, animScene, animIndex, t, opts.InPlace);
+            CpuMesh[] sampleMeshes = ExtractMeshes(scene, nodeGlobals);
+            foreach (AttachmentScene att in attachments)
+            {
+                sampleMeshes = AppendMeshes(sampleMeshes, ExtractAttachmentMeshes(att.Scene, att.Definition, nodeGlobals));
+            }
             (Vector3 mn, Vector3 mx, bool ok) = ComputeAabb(sampleMeshes, axisFix);
             foreach (CpuMesh m in sampleMeshes)
             {
