@@ -123,6 +123,7 @@ The sheet is laid out with **rows = directions** and **columns = frames** (width
 
 - The render path is verified end-to-end on **static, skinned, and animated** models — including real
   Mixamo rigs (e.g. Y Bot / Paladin) with separate `--anim` retargeting by bone name.
-- **Image-texture shading is pending**: the renderer shades using the material diffuse color plus
-  vertex color only — texture maps are not yet sampled, so textured characters render as a solid
-  silhouette in their base color.
+- **Diffuse textures are sampled** — embedded (matched by file name) or external files — so textured
+  characters render with their actual skins; models without a diffuse texture fall back to their
+  material color. Normal/specular/PBR maps are not used, and texture alpha is not applied as a cutout.
+  Lighting is intentionally flat (high ambient) so the texture reads clearly in the sprite.

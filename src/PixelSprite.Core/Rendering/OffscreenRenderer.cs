@@ -40,6 +40,11 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private readonly int _uModel;
     private readonly int _uLightDir;
     private readonly int _uBaseColor;
+    private readonly int _uHasTexture;
+    private readonly int _uTex;
+
+    // GL diffuse textures keyed by material index (0 = no texture); loaded lazily, deleted on dispose.
+    private readonly Dictionary<uint, uint> _materialTextures = new();
 
     private bool _disposed;
 
@@ -56,31 +61,38 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         "layout(location = 0) in vec3 aPos;\n" +
         "layout(location = 1) in vec3 aNormal;\n" +
         "layout(location = 2) in vec3 aColor;\n" +
+        "layout(location = 3) in vec2 aUv;\n" +
         "uniform mat4 uMvp;\n" +
         "uniform mat4 uModel;\n" +
         "out vec3 vNormal;\n" +
         "out vec3 vColor;\n" +
+        "out vec2 vUv;\n" +
         "void main()\n" +
         "{\n" +
         "    gl_Position = uMvp * vec4(aPos, 1.0);\n" +
         "    vNormal = mat3(uModel) * aNormal;\n" +
         "    vColor = aColor;\n" +
+        "    vUv = aUv;\n" +
         "}\n";
 
     private const string FragmentShaderSource =
         "#version 330 core\n" +
         "in vec3 vNormal;\n" +
         "in vec3 vColor;\n" +
+        "in vec2 vUv;\n" +
         "uniform vec3 uLightDir;\n" +
         "uniform vec3 uBaseColor;\n" +
+        "uniform sampler2D uTex;\n" +
+        "uniform int uHasTexture;\n" +
         "out vec4 FragColor;\n" +
         "void main()\n" +
         "{\n" +
         "    vec3 n = normalize(vNormal);\n" +
         "    float diff = max(dot(n, normalize(-uLightDir)), 0.0);\n" +
-        "    float ambient = 0.35;\n" +
-        "    // TODO: texture sampling\n" +
-        "    vec3 color = uBaseColor * vColor * (ambient + (1.0 - ambient) * diff);\n" +
+        "    float ambient = 0.6;\n" + // flatter light so albedo/texture reads clearly in the sprite
+        "    vec4 tex = texture(uTex, vec2(vUv.x, 1.0 - vUv.y));\n" +
+        "    vec3 albedo = (uHasTexture == 1) ? tex.rgb : (uBaseColor * vColor);\n" +
+        "    vec3 color = albedo * (ambient + (1.0 - ambient) * diff);\n" +
         "    FragColor = vec4(color, 1.0);\n" +
         "}\n";
 
@@ -122,6 +134,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _uModel = _gl.GetUniformLocation(_program, "uModel");
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uBaseColor = _gl.GetUniformLocation(_program, "uBaseColor");
+        _uHasTexture = _gl.GetUniformLocation(_program, "uHasTexture");
+        _uTex = _gl.GetUniformLocation(_program, "uTex");
 
         _vao = _gl.GenVertexArray();
         _vbo = _gl.GenBuffer();
@@ -187,6 +201,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _gl.UseProgram(_program);
         var lightDir = new Vector3(-0.4f, -0.7f, -0.6f);
         _gl.Uniform3(_uLightDir, lightDir.X, lightDir.Y, lightDir.Z);
+        _gl.Uniform1(_uTex, 0); // diffuse sampler reads from texture unit 0
         _gl.BindVertexArray(_vao);
 
         foreach (CpuMesh mesh in meshes)
@@ -194,6 +209,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             // Per-mesh base tint resolved from the material's diffuse color (or a gray fallback).
             Vector3 baseColor = mesh.BaseColor;
             _gl.Uniform3(_uBaseColor, baseColor.X, baseColor.Y, baseColor.Z);
+
+            if (mesh.TextureId != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, mesh.TextureId);
+                _gl.Uniform1(_uHasTexture, 1);
+            }
+            else
+            {
+                _gl.Uniform1(_uHasTexture, 0);
+            }
+
             UploadAndDraw(mesh, mvp, model);
         }
 
@@ -300,13 +327,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
                 BufferUsageARB.DynamicDraw);
         }
 
-        const uint stride = 9 * sizeof(float);
+        const uint stride = 11 * sizeof(float);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(1);
         _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
+        _gl.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, stride, (void*)(9 * sizeof(float)));
+        _gl.EnableVertexAttribArray(3);
 
         SetMatrix(_uMvp, mvp);
         SetMatrix(_uModel, model);
@@ -493,13 +522,15 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             ApplySkinning(mesh, nodeGlobals, positions, normals);
         }
 
-        // Interleave position + normal + vertex color. Colors default to white so the per-mesh
-        // material base color carries the hue; the white attribute keeps the GLSL multiply a no-op.
-        // TODO: read actual per-vertex colors from mesh->MColors[0] when a model provides them.
-        var vertices = new float[vertexCount * 9];
+        // Optional UV set 0 for texture sampling (null when the mesh has no UVs).
+        Vector3* uvs = mesh->MTextureCoords[0];
+
+        // Interleave position + normal + vertex color (white) + uv. Vertex color stays white so the
+        // texture or material base color carries the hue.
+        var vertices = new float[vertexCount * 11];
         for (int i = 0; i < vertexCount; i++)
         {
-            int o = i * 9;
+            int o = i * 11;
             vertices[o + 0] = positions[i].X;
             vertices[o + 1] = positions[i].Y;
             vertices[o + 2] = positions[i].Z;
@@ -510,6 +541,8 @@ public sealed unsafe class OffscreenRenderer : IDisposable
             vertices[o + 6] = 1f;
             vertices[o + 7] = 1f;
             vertices[o + 8] = 1f;
+            vertices[o + 9] = uvs != null ? uvs[i].X : 0f;
+            vertices[o + 10] = uvs != null ? uvs[i].Y : 0f;
         }
 
         // Triangulated indices (scene is expected to be imported with aiProcess_Triangulate).
@@ -528,7 +561,166 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         }
 
         Vector3 baseColor = GetDiffuseColor(scene, mesh->MMaterialIndex);
-        return new CpuMesh(vertices, indices.ToArray(), baseColor);
+        uint textureId = GetOrLoadDiffuseTexture(scene, mesh->MMaterialIndex);
+        return new CpuMesh(vertices, indices.ToArray(), baseColor, textureId);
+    }
+
+    /// <summary>Reads the diffuse/base-color texture path from a material's property list ("$tex.file").</summary>
+    private static string GetDiffuseTexturePath(Scene scene, uint materialIndex)
+    {
+        if (scene.MMaterials is null || materialIndex >= scene.MNumMaterials)
+        {
+            return string.Empty;
+        }
+
+        Material* mat = scene.MMaterials[materialIndex];
+        if (mat is null)
+        {
+            return string.Empty;
+        }
+
+        for (uint p = 0; p < mat->MNumProperties; p++)
+        {
+            MaterialProperty* prop = mat->MProperties[p];
+            if (prop is null || prop->MData is null)
+            {
+                continue;
+            }
+
+            if (prop->MKey.AsString == "$tex.file")
+            {
+                // The value is an aiString: 4-byte length prefix followed by the path bytes.
+                byte* d = prop->MData;
+                uint len = *(uint*)d;
+                if (len > 0 && len + 4 <= prop->MDataLength)
+                {
+                    return System.Text.Encoding.UTF8.GetString(d + 4, (int)len);
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Loads and caches a material's diffuse texture as a GL texture; returns 0 when there is none.</summary>
+    private uint GetOrLoadDiffuseTexture(Scene scene, uint materialIndex)
+    {
+        if (_materialTextures.TryGetValue(materialIndex, out uint cached))
+        {
+            return cached;
+        }
+
+        uint texId = 0;
+        using (SKBitmap? decoded = TryDecodeDiffuse(scene, materialIndex))
+        {
+            if (decoded is not null)
+            {
+                texId = UploadTexture(decoded);
+            }
+        }
+
+        _materialTextures[materialIndex] = texId;
+        return texId;
+    }
+
+    /// <summary>Decodes a material's diffuse image: embedded texture (matched by file name) or an external file.</summary>
+    private SKBitmap? TryDecodeDiffuse(Scene scene, uint materialIndex)
+    {
+        string path = GetDiffuseTexturePath(scene, materialIndex);
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        Silk.NET.Assimp.Texture* embedded = FindEmbeddedTexture(scene, path);
+        if (embedded is not null)
+        {
+            return DecodeEmbedded(embedded);
+        }
+
+        // External file on disk (absolute or relative to the working directory) — best effort.
+        return System.IO.File.Exists(path) ? SKBitmap.Decode(path) : null;
+    }
+
+    /// <summary>Finds an embedded texture matching a material path, by file name or Assimp's "*N" index form.</summary>
+    private static Silk.NET.Assimp.Texture* FindEmbeddedTexture(Scene scene, string path)
+    {
+        if (scene.MTextures is null || scene.MNumTextures == 0)
+        {
+            return null;
+        }
+
+        if (path.StartsWith('*') && uint.TryParse(path.AsSpan(1), out uint idx) && idx < scene.MNumTextures)
+        {
+            return scene.MTextures[idx];
+        }
+
+        string target = BaseName(path);
+        for (uint t = 0; t < scene.MNumTextures; t++)
+        {
+            Silk.NET.Assimp.Texture* et = scene.MTextures[t];
+            if (et is not null && string.Equals(BaseName(et->MFilename.AsString), target, StringComparison.OrdinalIgnoreCase))
+            {
+                return et;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Decodes an embedded texture: compressed bytes (height 0) via SkiaSharp, else raw BGRA texels.</summary>
+    private static SKBitmap? DecodeEmbedded(Silk.NET.Assimp.Texture* et)
+    {
+        if (et->MHeight == 0)
+        {
+            // Compressed image (PNG/JPG): MWidth is the byte length of the data at MPcData.
+            using SKData data = SKData.CreateCopy((IntPtr)et->PcData, (ulong)et->MWidth);
+            return SKBitmap.Decode(data);
+        }
+
+        int w = (int)et->MWidth, h = (int)et->MHeight;
+        var bmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        Texel* texels = et->PcData;
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                Texel t = texels[(y * w) + x];
+                bmp.SetPixel(x, y, new SKColor(t.R, t.G, t.B, t.A));
+            }
+        }
+
+        return bmp;
+    }
+
+    /// <summary>Uploads an SKBitmap as an RGBA8 GL texture with mipmaps; returns the texture id.</summary>
+    private uint UploadTexture(SKBitmap source)
+    {
+        SKBitmap rgba = source.ColorType == SKColorType.Rgba8888 ? source : source.Copy(SKColorType.Rgba8888);
+
+        uint tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        _gl.TexImage2D(
+            TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rgba.Width, (uint)rgba.Height, 0,
+            PixelFormat.Rgba, PixelType.UnsignedByte, (void*)rgba.GetPixels());
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.LinearMipmapLinear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.Repeat);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.Repeat);
+
+        if (!ReferenceEquals(rgba, source))
+        {
+            rgba.Dispose();
+        }
+
+        return tex;
+    }
+
+    private static string BaseName(string path)
+    {
+        int slash = path.LastIndexOfAny(new[] { '/', '\\' });
+        return slash >= 0 ? path[(slash + 1)..] : path;
     }
 
     /// <summary>Reads a material's diffuse color from its property list, falling back to neutral gray.</summary>
@@ -679,7 +871,7 @@ public sealed unsafe class OffscreenRenderer : IDisposable
 
         foreach (CpuMesh mesh in meshes)
         {
-            for (int i = 0; i < mesh.Vertices.Length; i += 9)
+            for (int i = 0; i < mesh.Vertices.Length; i += 11)
             {
                 var p = new Vector3(mesh.Vertices[i], mesh.Vertices[i + 1], mesh.Vertices[i + 2]);
                 p = Vector3.Transform(p, axisFix);
@@ -757,6 +949,14 @@ public sealed unsafe class OffscreenRenderer : IDisposable
         _gl.DeleteFramebuffer(_fbo);
         _gl.DeleteTexture(_colorTex);
         _gl.DeleteRenderbuffer(_depthRbo);
+        foreach (uint tex in _materialTextures.Values)
+        {
+            if (tex != 0)
+            {
+                _gl.DeleteTexture(tex);
+            }
+        }
+
         _gl.Dispose();
         _window.Dispose();
     }
@@ -765,16 +965,18 @@ public sealed unsafe class OffscreenRenderer : IDisposable
     private readonly record struct Bounds(Vector3 Center, float Radius);
 
     /// <summary>
-    /// Skinned CPU geometry: interleaved [px,py,pz, nx,ny,nz, r,g,b] vertices, triangle indices,
-    /// and the mesh's material base color (used as a per-mesh tint uniform).
+    /// Skinned CPU geometry: interleaved [px,py,pz, nx,ny,nz, r,g,b, u,v] vertices, triangle indices,
+    /// the mesh's material base color, and its diffuse GL texture id (0 = none).
     /// </summary>
-    private sealed class CpuMesh(float[] vertices, uint[] indices, Vector3 baseColor) : IDisposable
+    private sealed class CpuMesh(float[] vertices, uint[] indices, Vector3 baseColor, uint textureId) : IDisposable
     {
         public float[] Vertices { get; } = vertices;
 
         public uint[] Indices { get; } = indices;
 
         public Vector3 BaseColor { get; } = baseColor;
+
+        public uint TextureId { get; } = textureId;
 
         public void Dispose()
         {
