@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<style>
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:#0F0F11;}
+</style>
+</helmet>
+
+<!-- ===== A · EMPTY ===== -->
+<div style="position:absolute;left:0;top:0;width:1100px;">
+  <div data-drags-parent="1" style="display:flex;align-items:center;gap:9px;margin:0 0 11px 2px;cursor:grab;font:600 13px 'Segoe UI',system-ui,sans-serif;color:#8A8C92;">
+    <span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:4px;background:#26272A;color:#9A9CA2;font-size:11px;">A</span>
+    Empty — nothing loaded yet
+  </div>
+  <div style="background:#1A1B1D;border-radius:7px;overflow:hidden;border:1px solid #000;box-shadow:0 2px 8px rgba(0,0,0,.5),0 20px 60px rgba(0,0,0,.45);">
+    <dc-import name="AppWindow" state="empty" accent="{{ accent }}" on-accent="{{ onAccent }}" grid-overlay="{{ gridOverlay }}" playing="{{ playing }}" style="display:block;width:1100px;height:720px;" hint-size="1100px,720px"></dc-import>
+  </div>
+</div>
+
+<!-- ===== B · LOADED + ANIMATING ===== -->
+<div style="position:absolute;left:1180px;top:0;width:1100px;">
+  <div data-drags-parent="1" style="display:flex;align-items:center;gap:9px;margin:0 0 11px 2px;cursor:grab;font:600 13px 'Segoe UI',system-ui,sans-serif;color:#8A8C92;">
+    <span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:4px;background:#26272A;color:#9A9CA2;font-size:11px;">B</span>
+    Loaded + animating
+  </div>
+  <div style="background:#1A1B1D;border-radius:7px;overflow:hidden;border:1px solid #000;box-shadow:0 2px 8px rgba(0,0,0,.5),0 20px 60px rgba(0,0,0,.45);">
+    <dc-import name="AppWindow" state="loaded" accent="{{ accent }}" on-accent="{{ onAccent }}" grid-overlay="{{ gridOverlay }}" playing="{{ playing }}" style="display:block;width:1100px;height:720px;" hint-size="1100px,720px"></dc-import>
+  </div>
+</div>
+
+<!-- ===== C · SHEET GENERATED ===== -->
+<div style="position:absolute;left:2360px;top:0;width:1100px;">
+  <div data-drags-parent="1" style="display:flex;align-items:center;gap:9px;margin:0 0 11px 2px;cursor:grab;font:600 13px 'Segoe UI',system-ui,sans-serif;color:#8A8C92;">
+    <span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:4px;background:#26272A;color:#9A9CA2;font-size:11px;">C</span>
+    Sheet generated
+  </div>
+  <div style="background:#1A1B1D;border-radius:7px;overflow:hidden;border:1px solid #000;box-shadow:0 2px 8px rgba(0,0,0,.5),0 20px 60px rgba(0,0,0,.45);">
+    <dc-import name="AppWindow" state="sheet" accent="{{ accent }}" on-accent="{{ onAccent }}" grid-overlay="{{ gridOverlay }}" playing="{{ playing }}" style="display:block;width:1100px;height:720px;" hint-size="1100px,720px"></dc-import>
+  </div>
+</div>
+
+<!-- ===== D · STYLE SPEC ===== -->
+<div style="position:absolute;left:0;top:818px;width:1480px;">
+  <div data-drags-parent="1" style="display:flex;align-items:center;gap:9px;margin:0 0 11px 2px;cursor:grab;font:600 13px 'Segoe UI',system-ui,sans-serif;color:#8A8C92;">
+    <span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:4px;background:#26272A;color:#9A9CA2;font-size:11px;">D</span>
+    Style spec — named values for WPF
+  </div>
+  <div style="background:#1A1B1D;border-radius:7px;overflow:hidden;border:1px solid #000;box-shadow:0 2px 8px rgba(0,0,0,.5),0 20px 60px rgba(0,0,0,.45);">
+    <dc-import name="StyleSpec" accent="{{ accent }}" on-accent="{{ onAccent }}" style="display:block;width:1480px;" hint-size="1480px,1320px"></dc-import>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E8943A&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#E8943A&quot;,&quot;#4C8DFF&quot;,&quot;#8BD24F&quot;,&quot;#34C9D6&quot;,&quot;#E5559E&quot;],&quot;section&quot;:&quot;Theme&quot;},&quot;playing&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview&quot;,&quot;label&quot;:&quot;Animation playing&quot;},&quot;gridOverlay&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview&quot;,&quot;label&quot;:&quot;Pixel grid overlay&quot;}}">
+class Component extends DCLogic {
+  hexLum(hex){
+    const h=(hex||'#E8943A').replace('#','');
+    const r=parseInt(h.slice(0,2),16)/255,g=parseInt(h.slice(2,4),16)/255,b=parseInt(h.slice(4,6),16)/255;
+    const f=c=>c<=0.03928?c/12.92:Math.pow((c+0.055)/1.055,2.4);
+    return 0.2126*f(r)+0.7152*f(g)+0.0722*f(b);
+  }
+  renderVals(){
+    const accent=this.props.accent ?? '#E8943A';
+    return {
+      accent,
+      onAccent: (()=>{const la=this.hexLum(accent),dl=this.hexLum('#15120E');const c=(x,y)=>{const a=Math.max(x,y),b=Math.min(x,y);return (a+0.05)/(b+0.05);};return c(la,dl)>=c(la,1)?'#15120E':'#FFFFFF';})(),
+      gridOverlay: this.props.gridOverlay ?? false,
+      playing: this.props.playing ?? true
+    };
+  }
+}
+</script>
+</body>
+</html>

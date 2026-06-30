@@ -1,205 +1,153 @@
-# PixelSprite CLI
+# SpriteForge
 
-A Windows-first, standalone **.NET 8** command-line tool that loads a rigged FBX/GLB model, renders it from 2, 4, or 8 directions at high resolution via OpenGL offscreen rendering, and converts the result into transparent-background **pixel-art sprite sheets** (or frame sequences). Downsampling uses dominant-color block voting plus Wu palette quantization, producing clean, low-color sprites ready for engines like Unity. The rendering core is forked and extended from [Bo-sung/ComfyUI-FBX-ControlNet-Converter](https://github.com/Bo-sung/ComfyUI-FBX-ControlNet-Converter).
+**CLI Pipeline for Converting 3D Rigging Models into Pixel Art Sprite Sheets**
 
-## Tech stack
+Inspired by the sprite creation method from StarCraft 1, it processes high-resolution 3D rendering → downsampling → pixel art post-processing → preparation for Unity import in a single command.
 
-- **C# / .NET 8** — self-contained `win-x64` publish
-- **Silk.NET.OpenGL + Silk.NET.Assimp** — FBX/GLB load, skinning, animation evaluation, OpenGL offscreen rendering
-- **SkiaSharp** — PNG image I/O with full alpha channel
-- **Vendored Wu quantizer** (nQuant.Core / Wu quantization) — palette reduction
-- **System.CommandLine** — CLI argument parsing
+---
 
-## Build & run
+## Background
+
+SC1 sprites were created by rendering high-resolution 3D models on Silicon Graphics workstations and downsampling pixel by pixel. SpriteForge recreates this pipeline with modern tools, adding automated post-processing to enable high-quality sprite creation independently.
+
+---
+
+## Key Features
+
+### Automatic 3D to Pixel Art Conversion
+Input FBX/GLB files, rotate cameras in specified directions to render off-screen images, then convert to pixel art and pack into sprite sheets.
+
+### Directional Rendering (2 / 4 / 8 Directions)
+Default is 8 directions (0° ~ 315°, 45° intervals). Supports 2 directions (front/back) and 4 directions as options. The vertical camera angle is set to 26.5° (matching SC1 isometric angle).
+
+### Pixel Art Post-Processing Pipeline
+Applies a processing layer ported from the [unfake.js](https://github.com/jenissimo/unfake.js) algorithm in C#, not just nearest-neighbor downsampling.
+
+| Stage | Processing Content |
+|---|---|
+| Dominant Downscale | Selects representative colors through frequency voting within blocks to minimize boundary bleeding |
+| Alpha Binarization | Divides semi-transparent boundary pixels into 0 or 255 to ensure transparent backgrounds |
+| Edge Dilation | Fills RGB of transparent border pixels with adjacent opaque colors to prevent jagged edges |
+| Palette Quantization | Limits color count using Wu Quantization (default 32 colors), allowing fixed palette specification |
+| Artifact Cleanup | Combines noise removal (morphological) and jagged edge smoothing |
+
+### Transparent Background Guarantee
+Maintains alpha channels from rendering to output, ensuring backgrounds are always fully transparent (alpha 0).
+
+### Direct Unity Import Ready
+Outputs sprite sheets (PNG) along with pivot and frame information files.
+
+### Extensible GUI Architecture
+Designed with separate core libraries and CLI entry points for potential future GUI frontend integration without altering core functionality.
+
+---
+
+## Pipeline Flow
+
+```
+FBX / GLB
+    │
+    ▼
+[OffscreenRenderer]  ← OpenGL offscreen, RGBA8, transparent background
+    │  Hi-res frames × (direction count × animation frame count)
+    ▼
+[PixelArtProcessor]
+    ├─ MorphClean       (pre-downscale noise removal on hi-res)
+    ├─ DominantDownscale
+    ├─ AlphaBinarize
+    ├─ PaletteQuantize
+    └─ JaggyClean
+    │  Pixel art frames
+    ▼
+[SpriteSheetPacker]   ← rows = directions, columns = frames
+    │
+    ▼
+output/
+  Walk_sheet.png
+  Walk_metadata.json
+```
+
+---
+
+## Build & Run
+
+**Requirements:** Windows, .NET 8 or higher
 
 ```powershell
-# Restore + build (Debug or Release)
-dotnet build -c Release
-
-# Run the test suite
-dotnet test
-
-# Publish a self-contained single-file executable -> ./bin/pixelsprite.exe
+# Build
 ./build.ps1
+
+# Default run (8 directions, 48px, 32 colors)
+./bin/spriteforge.exe --input "Knight.fbx"
+
+# With options
+./bin/spriteforge.exe `
+  --input "Knight.fbx" `
+  --anim "Knight_Walk.fbx" `
+  --directions 8 `
+  --render-size 256 `
+  --sprite-size 48 `
+  --fps 12 `
+  --max-colors 32 `
+  --output-mode both `
+  --out "./output"
 ```
 
-`build.ps1` runs `dotnet publish` for win-x64 with `--self-contained` and `PublishSingleFile`, bundling all managed and native dependencies. No .NET runtime install is required on the target machine. The resulting binary is `./bin/pixelsprite.exe`.
+---
 
-## Quick start
-
-Render the committed sample cube from 4 directions and emit both a sheet and frames:
-
-```powershell
-./bin/pixelsprite.exe --input samples/cube.obj --directions 4 --render-size 64 --sprite-size 16 --frames 1 --output-mode both --out output
-```
-
-## Options reference
+## CLI Options
 
 | Option | Default | Description |
-| --- | --- | --- |
-| `--input <path>` | *(required)* | FBX or GLB file (skinned mesh + animation, or mesh only) |
-| `--anim <path>` | — | Separate animation-only FBX, retargeted by bone name |
-| `--directions <n>` | `8` | Number of render directions: `2`, `4`, or `8` |
-| `--render-size <n>` | `256` | Offscreen render resolution (square) |
-| `--sprite-size <n>` | `48` | Final pixel-art resolution (square) |
-| `--fps <n>` | `12` | Frame sampling rate |
-| `--frames <n>` | `0` | Force exact frame count; `0` = whole clip |
-| `--max-colors <n>` | `32` | Palette color limit |
-| `--palette <path>` | — | Fixed palette PNG (skips Wu quantization, nearest-color match only) |
-| `--alpha-threshold <n>` | `128` | Binarization cutoff, `0`–`255` |
-| `--no-edge-dilate` | off | Disable edge dilation |
-| `--cleanup <list>` | `morph,jaggy` | Comma-separated cleanup steps: `morph`, `jaggy` |
-| `--output-mode <m>` | `sheet` | Output mode: `sheet`, `frames`, or `both` |
-| `--out <path>` | `./output` | Output directory |
-| `--cam-pitch <f>` | `26.5` | Camera elevation (vertical angle), in degrees |
-| `--cam-zoom <f>` | `1.0` | Zoom factor (relative) |
-| `--cam-yaw <f>` | `0` | Base azimuth for direction 0, about the up axis |
-| `--cam-distance <f>` | `0` | Explicit camera distance in model units (`0` = automatic) |
-| `--cam-target <x,y,z>` | — | Look-at pan offset from the model centre (Y-up frame) |
-| `--ortho` | off | Use orthographic projection |
-| `--up-axis <s>` | `y` | Model up axis: `y` (Unity-style) or `z` (Unreal-style) |
-| `--in-place` | off | Remove root motion: keep the character centred |
-| `--check-root-motion` | off | Report root motion in the animation, then exit (no render) |
-| `--equip <path>` | — | Equipment manifest JSON: attach weapons/armor to the skeleton (Unreal sockets / master pose). Bone names match tolerantly (case/namespace/separator-insensitive), so `"righthand"` binds to `mixamorig:RightHand`. |
-| `--retarget <path>` | — | Retarget map JSON (joint mapping) for playing an animation authored for a different skeleton (e.g. Mixamo `mixamorig:*` -> Unreal `hand_r`). Rotation is transferred verbatim; optional `scaleTranslations` rescales root travel by the target/source bone-length ratio. |
-| `--list-bones` | off | Dump the skeleton/node tree with equipment-relevant bones flagged, then exit (the CLI analogue of an engine's bone-picker dropdown) |
-| `--verbose` | off | Print per-frame progress |
+|---|---|---|
+| `--input` | *(Required)* | Path to FBX or GLB file |
+| `--anim` | — | Separate animation-only FBX (retargeted by bone name) |
+| `--directions` | `8` | `2` / `4` / `8` |
+| `--render-size` | `256` | Off-screen render resolution (square) |
+| `--sprite-size` | `48` | Final pixel art resolution (square) |
+| `--fps` | `12` | Frame sampling rate |
+| `--frames` | `0` | Force exact frame count (`0` = entire clip) |
+| `--max-colors` | `32` | Maximum palette color count |
+| `--palette` | — | Fixed palette PNG (skips Wu quantization) |
+| `--alpha-threshold` | `128` | Alpha binarization threshold (0–255) |
+| `--no-edge-dilate` | — | Disable edge dilation |
+| `--cleanup` | `morph,jaggy` | Comma-separated cleanup passes: `morph`, `jaggy` |
+| `--output-mode` | `sheet` | `sheet` / `frames` / `both` |
+| `--out` | `./output` | Output directory |
+| `--cam-pitch` | `26.5` | Camera vertical angle (degrees) |
+| `--cam-zoom` | `1.0` | Zoom factor |
+| `--cam-yaw` | `0` | Base azimuth for direction 0 (rotates all directions about the up axis) |
+| `--cam-distance` | `0` | Explicit camera distance in model units (`0` = automatic) |
+| `--cam-target` | — | Look-at pan offset from model centre as `x,y,z` |
+| `--ortho` | — | Orthographic projection |
+| `--up-axis` | `y` | `y` (Unity) / `z` (Unreal) |
+| `--in-place` | — | Remove root motion: keep the character centred |
+| `--check-root-motion` | — | Report root motion in the animation, then exit |
+| `--equip` | — | Equipment manifest JSON (socket / master-pose attachments) |
+| `--retarget` | — | Retarget map JSON for cross-skeleton animation |
+| `--list-bones` | — | Dump skeleton/node tree, then exit |
+| `--verbose` | — | Print per-frame progress |
 
-## Camera & coordinate system
+---
 
-The model is framed in a **Y-up frame** (Unity-style) by default; pass `--up-axis z` for **Z-up**
-(Unreal-style) source models. Directions are rendered by **rotating the model** about its vertical
-centre axis while the camera and light stay fixed at the front — so screen-space lighting and framing
-stay consistent across every direction (the standard convention for directional sprite sheets).
+## Output Files
 
-The camera is positioned with spherical controls around the subject:
-
-- **`--cam-pitch`** — elevation above the horizon (0 = eye level, 90 = top-down).
-- **`--cam-yaw`** — the facing of direction 0 about the up axis; rotates the whole direction set (e.g.
-  `--cam-yaw 45` for diagonal-facing sprites).
-- **`--cam-distance`** / **`--cam-zoom`** — absolute distance (model units) or a relative zoom factor.
-- **`--cam-target x,y,z`** — pan the look-at point off the model centre.
-
-Framing is computed once for the whole clip (so the subject keeps a constant scale across all frames
-and directions). For animations that travel (root motion), add `--in-place` to keep the character
-centred; use `--check-root-motion` to see how far a clip travels.
-
-## Equipment (weapons & armor)
-
-PixelSprite can equip attachments onto the character before rendering, modelled on **Unreal
-Engine's skeletal mesh sockets** and **`MasterPoseComponent`** (and Unity's parent-constraint /
-child-socket patterns). Attachments are declared in a JSON manifest passed via `--equip`.
-
-Two modes are supported, matching how the engines split equipment:
-
-- **Socket** (`useMasterPose: false`, the default) — for items held in the hand (swords, staves,
-  shields). The attachment is a static mesh placed rigidly at `offset × boneGlobal` every frame, so
-  it tracks the bone's animation with no skinning.
-- **Master pose** (`useMasterPose: true`) — for body-fitting gear (armor, gloves, helmets). The
-  attachment must be a skinned mesh that shares the character's bone names; it is skinned with the
-  *character's* per-frame bone poses (Unreal's `MasterPoseComponent` behaviour).
-
-### Manifest schema
-
-```json
-{
-  "attachments": [
-    {
-      "name": "sword",
-      "file": "./assets/sword.glb",
-      "socketBone": "Hand_R",
-      "offset": { "position": [0, 0, 0.05], "rotation": [0, 90, 0], "scale": 1.0 }
-    },
-    {
-      "name": "shield",
-      "file": "./assets/shield.glb",
-      "socketBone": "Forearm_L"
-    },
-    {
-      "name": "helmet",
-      "file": "./assets/helmet.glb",
-      "useMasterPose": true
-    }
-  ]
-}
+**Sprite Sheet Mode (`--output-mode sheet`)**
+```
+output/
+  Walk_sheet.png        # rows = directions, columns = frames
+  Walk_metadata.json    # metadata for Unity import
 ```
 
-- `file` is resolved relative to the **manifest's directory** (so a manifest and its assets travel
-  together) and verified to exist at load time.
-- `offset.rotation` is in **degrees**, Euler (yaw, pitch, roll) — exactly how you'd edit a socket's
-  Relative Rotation in an editor. The whole `offset` object is optional (defaults: no translation,
-  no rotation, scale 1).
-- Socket mode requires `socketBone`; master-pose mode does not (it binds by bone name).
-- **Bone names match tolerantly**: casing, word separators (`_`, `-`, `.`), and namespace/path prefixes
-  (`mixamorig:`, `Armature|`) are ignored. So `"righthand"`, `"Right_Hand"`, and `"RightHand"` all
-  bind to `mixamorig:RightHand`. An ambiguous name (e.g. `"hand"` matching both hands) is rejected —
-  supply a more specific name, or run `--list-bones` to see the exact names. Not-found errors list the
-  closest candidates.
-
-```powershell
-./bin/pixelsprite.exe --input hero.fbx --anim walk.fbx --equip equipment.json --directions 8
+**Frame Sequence Mode (`--output-mode frames`)**
+```
+output/
+  Walk_dir00_f0000.png  # direction 0, frame 0
+  Walk_dir00_f0001.png
+  ...
+  Walk_dir07_f0011.png  # direction 7, frame 11
 ```
 
-Framing is computed across the character **and** every attachment, so weapons that extend beyond
-the body stay in frame. Comments and trailing commas are allowed in the manifest.
-
-## Animation retargeting (`--retarget`)
-
-Animations authored for one skeleton (e.g. Mixamo's `mixamorig:RightHand`) won't bind to a character
-built with a different rig (e.g. an Unreal-style `hand_r`) because the bone names don't match. A
-**retarget map** supplies the `sourceBone -> targetBone` table (the joint-mapping algorithm): the
-source bone's **rotation is transferred verbatim**, and (optionally) the **translation is rescaled**
-by the target/source bone-length ratio.
-
-```json
-{
-  "name": "Mixamo -> Unreal",
-  "scaleTranslations": false,
-  "bones": {
-    "mixamorig:Hips":         "pelvis",
-    "mixamorig:Spine":        "spine_01",
-    "mixamorig:RightArm":     "upperarm_r",
-    "mixamorig:RightHand":    "hand_r"
-  }
-}
-```
-
-```powershell
-./bin/pixelsprite.exe --input hero_unreal.fbx --anim mixamo_walk.fbx `
-  --retarget retarget.json --directions 8 --in-place
-```
-
-Map values resolve tolerantly through the same matcher as `--equip` (so `"hand_r"` binds whatever the
-exact bone name is). A bundled `samples/retarget_mixamo_to_unreal.json` maps the full Mixamo humanoid
-rig onto the Unreal-style skeleton used by assets like the RPGHeroSquad pack.
-
-> **Limitation (per the retargeting literature):** joint mapping carries rotations verbatim, so
-> differences in *rest pose* (T- vs A-pose) or proportions are not corrected. This is usually fine for
-> pixel-art sprites sampled at low resolution; for hero-quality results, bake the retarget in a DCC
-> tool (Unreal IK Retargeter, Blender's retargeting add-on) and export, then drop that file in as
-> `--anim` with no `--retarget`.
-
-## Output
-
-**Frame sequence mode** (`--output-mode frames` or `both`):
-
-```
-{outDir}/{animName}_dir{DD}_f{FFFF}.png
-```
-
-Directions are zero-padded to 2 digits (`dir00`), frames to 4 digits (`f0000`).
-
-**Sheet mode** (`--output-mode sheet` or `both`):
-
-```
-{outDir}/{animName}_sheet.png
-{outDir}/{animName}_metadata.json
-```
-
-The sheet is laid out with **rows = directions** and **columns = frames** (width = `spriteWidth × frameCount`, height = `spriteHeight × directionCount`). Backgrounds are fully transparent.
-
-### `metadata.json` schema
-
+**metadata.json Structure**
 ```json
 {
   "spriteWidth": 48,
@@ -217,11 +165,41 @@ The sheet is laid out with **rows = directions** and **columns = frames** (width
 }
 ```
 
-## Notes / known limitations
+---
 
-- The render path is verified end-to-end on **static, skinned, and animated** models — including real
-  Mixamo rigs (e.g. Y Bot / Paladin) with separate `--anim` retargeting by bone name.
-- **Diffuse textures are sampled** — embedded (matched by file name) or external files — so textured
-  characters render with their actual skins; models without a diffuse texture fall back to their
-  material color. Normal/specular/PBR maps are not used, and texture alpha is not applied as a cutout.
-  Lighting is intentionally flat (high ambient) so the texture reads clearly in the sprite.
+## Technology Stack
+
+| Role | Library | License |
+|---|---|---|
+| 3D Loading / Skinning | Silk.NET.Assimp | MIT |
+| OpenGL Rendering | Silk.NET.OpenGL + GLFW | MIT |
+| Image I/O | SkiaSharp | MIT |
+| Palette Quantization | Wu quantizer (vendored) | MIT |
+| CLI Parsing | System.CommandLine | MIT |
+| Runtime | .NET 8 | MIT |
+
+Pixel art post-processing algorithm independently implemented in C# based on [unfake.js](https://github.com/jenissimo/unfake.js) (MIT).
+
+---
+
+## Project Structure
+
+```
+SpriteForge/
+├── src/
+│   ├── SpriteForge.Core/       # Core library (reusable for GUI frontend)
+│   │   ├── Rendering/          # OffscreenRenderer, DirectionScheduler, RenderJob
+│   │   ├── PixelArt/           # Pixel art processing pipeline
+│   │   ├── Packing/            # Sprite sheet packing and metadata
+│   │   └── Models/             # Options and data classes
+│   └── SpriteForge.Cli/        # CLI entry point
+├── tests/
+│   └── SpriteForge.Tests/      # Unit tests
+└── build.ps1                   # win-x64 single-file build
+```
+
+---
+
+## License
+
+MIT

@@ -45,3 +45,10 @@ Desktop.ini
 
 # Project output assets (generated sprite sheets / frames)
 output/
+test_output/
+
+# AgentManager worker/ask spool (local tooling, not source)
+.am/
+
+# Local WPF binding-error diagnostic log
+spriteforge_binding_errors.log

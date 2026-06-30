@@ -1,9 +1,8 @@
 <Project>
 
-  <!-- Shared metadata/version for all PixelSprite projects. -->
   <PropertyGroup>
     <Version>1.1.0</Version>
-    <Product>PixelSprite CLI</Product>
+    <Product>SpriteForge</Product>
     <Company>SpriteForge</Company>
     <Authors>서보성</Authors>
     <!-- Keep the reported version clean (no +commit-hash suffix). -->

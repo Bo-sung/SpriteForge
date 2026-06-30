@@ -1,0 +1,111 @@
+<UserControl x:Class="SpriteForge.Gui.Views.ResultPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="600" d:DesignWidth="360">
+    <!-- DataContext is a SheetPlayerViewModel (set by MainWindow): plays the generated sheet as an
+         animation, one cell (direction × frame) at a time. -->
+    <Border Background="{StaticResource PanelBrush}"
+            BorderBrush="{StaticResource BorderSubtleBrush}"
+            BorderThickness="0,1,0,0">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Border Grid.Row="0"
+                    Background="{StaticResource PanelHeaderBrush}"
+                    BorderBrush="{StaticResource BorderSubtleBrush}"
+                    BorderThickness="0,0,0,1">
+                <DockPanel Margin="9,0">
+                    <TextBlock DockPanel.Dock="Right"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="10.5"
+                               Text="{Binding DirectionLabel, StringFormat='dir {0}'}"/>
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource HeaderTextBrush}"
+                               Text="RESULT"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Animated viewport -->
+            <Grid Grid.Row="1" ClipToBounds="True" Background="{StaticResource EditorBrush}">
+                <Rectangle Fill="{StaticResource CheckerBrush12}"/>
+
+                <Image Source="{Binding CurrentFrameImage}"
+                       Margin="24"
+                       Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="NearestNeighbor"
+                       Visibility="{Binding HasSheet, Converter={StaticResource BoolToVis}}"/>
+
+                <Grid Visibility="{Binding HasSheet, Converter={StaticResource InverseBoolToVis}}">
+                    <Grid HorizontalAlignment="Center" VerticalAlignment="Center" Width="260">
+                        <Rectangle RadiusX="4" RadiusY="4"
+                                   Stroke="{StaticResource InputBorderBrush}"
+                                   StrokeThickness="1"
+                                   StrokeDashArray="3 3"
+                                   Fill="Transparent"/>
+                        <TextBlock Text="Generate a sheet to play the animation here."
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontStyle="Italic"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Margin="18"/>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <!-- Transport + direction controls (shown once a sheet is loaded) -->
+            <Border Grid.Row="2"
+                    Background="{StaticResource PanelHeaderBrush}"
+                    BorderBrush="{StaticResource BorderSubtleBrush}"
+                    BorderThickness="0,1,0,0"
+                    Visibility="{Binding HasSheet, Converter={StaticResource BoolToVis}}">
+                <DockPanel Margin="9,6">
+                    <!-- Direction nav (left) -->
+                    <Button DockPanel.Dock="Left" Command="{Binding PrevDirCommand}" ToolTip="Previous direction" MinWidth="34">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE76B;"/>
+                    </Button>
+                    <Button DockPanel.Dock="Left" Command="{Binding NextDirCommand}" ToolTip="Next direction" MinWidth="34" Margin="6,0,0,0">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE76C;"/>
+                    </Button>
+
+                    <!-- Frame readout (right) -->
+                    <TextBlock DockPanel.Dock="Right"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource ControlTextBrush}"
+                               Text="{Binding FrameLabel}"/>
+
+                    <!-- Play/pause + loop (center) -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Button Command="{Binding PlayPauseCommand}" ToolTip="Play / pause" MinWidth="56">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="13">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="&#xE768;"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                <Setter Property="Text" Value="&#xE769;"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Button>
+                        <CheckBox Content="Loop" IsChecked="{Binding Loop}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>

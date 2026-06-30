@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SpriteForge.Gui</AssemblyName>
+    <RootNamespace>SpriteForge.Gui</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpriteForge.Core\SpriteForge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Used by PreviewService to convert the renderer's SKBitmap into a WPF BitmapSource. -->
+    <PackageReference Include="SkiaSharp" Version="4.148.0" />
+  </ItemGroup>
+
+</Project>

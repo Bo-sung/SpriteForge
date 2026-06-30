@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpriteForge.Core\SpriteForge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>spriteforge</AssemblyName>
+    <!-- Bundle native libs (SkiaSharp, and the Assimp/GLFW natives from Ultz.Native.*) for single-file. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Extract ALL content (managed + native) to one temp dir on launch. Required so Silk.NET's
+         native loader, which probes AppContext.BaseDirectory, finds Assimp64.dll/glfw3.dll next to
+         the assemblies. Without this, single-file rendering fails with "Could not load ... library". -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,324 @@
+<UserControl x:Class="SpriteForge.Gui.Views.OutputPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:vm="clr-namespace:SpriteForge.Gui.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:OutputViewModel, IsDesignTimeCreatable=False}"
+             d:DesignHeight="238" d:DesignWidth="360">
+    <UserControl.Resources>
+        <!--
+            Compass cell: uses TemplateBinding so Background/BorderBrush/Foreground
+            can be overridden by DataTrigger setters on per-button inline styles.
+        -->
+        <Style x:Key="CompassCell" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource SecondaryControlBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource MenuTextBrush}"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="3" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource BorderHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource ControlPressedBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Card shell: top border separates from 2D result above. -->
+    <Border Background="{StaticResource PanelBrush}"
+            BorderBrush="{StaticResource BorderSubtleBrush}"
+            BorderThickness="0,1,0,0">
+        <DockPanel>
+            <!-- Header (28px): icon + OUTPUT + PNG badge -->
+            <Border DockPanel.Dock="Top" Height="28"
+                    Background="{StaticResource PanelHeaderBrush}"
+                    BorderBrush="{StaticResource BorderSubtleBrush}"
+                    BorderThickness="0,0,0,1">
+                <DockPanel Margin="9,0">
+                    <!-- PNG badge -->
+                    <Border DockPanel.Dock="Right" VerticalAlignment="Center"
+                            Background="{StaticResource AccentTintBrush}"
+                            BorderBrush="{StaticResource AccentBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="6,1">
+                        <TextBlock Text="PNG" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentBrush}"/>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE74E;" FontSize="11"
+                                   Foreground="{StaticResource HeaderTextBrush}" Margin="0,0,6,0"/>
+                        <TextBlock Text="OUTPUT" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{StaticResource HeaderTextBrush}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- Body: compass left (138px) + spacer + controls right -->
+            <Grid Margin="8,8,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="138"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- ===== Left: Direction compass ===== -->
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="DIRECTION" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextLabelBrush}" Margin="0,0,0,6"/>
+
+                    <!-- 3×3 compass grid.
+                         Direction index convention: N=0, NE=1, E=2, SE=3, S=4, SW=5, W=6, NW=7 -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Row 0: NW(7), N(0), NE(1) -->
+                        <Button Grid.Row="0" Grid.Column="0" Tag="7" Click="Direction_Click" ToolTip="NW — 315°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="7">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            NW
+                        </Button>
+                        <Button Grid.Row="0" Grid.Column="1" Tag="0" Click="Direction_Click" ToolTip="N — 0°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="0">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            N
+                        </Button>
+                        <Button Grid.Row="0" Grid.Column="2" Tag="1" Click="Direction_Click" ToolTip="NE — 45°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="1">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            NE
+                        </Button>
+
+                        <!-- Row 1: W(6), center info cell, E(2) -->
+                        <Button Grid.Row="1" Grid.Column="0" Tag="6" Click="Direction_Click" ToolTip="W — 270°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="6">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            W
+                        </Button>
+                        <!-- Center: active direction name + angle (non-interactive) -->
+                        <Border Grid.Row="1" Grid.Column="1" Margin="1"
+                                Background="{StaticResource EditorBrush}"
+                                BorderBrush="{StaticResource InputBorderBrush}"
+                                BorderThickness="1" CornerRadius="3">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding ActiveDirLabel}" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextBrush}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock FontSize="9.5" Foreground="{StaticResource TextMutedBrush}"
+                                           HorizontalAlignment="Center">
+                                    <Run Text="{Binding ActiveDirAngle, Mode=OneWay}"/>
+                                    <Run Text="°"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                        <Button Grid.Row="1" Grid.Column="2" Tag="2" Click="Direction_Click" ToolTip="E — 90°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="2">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            E
+                        </Button>
+
+                        <!-- Row 2: SW(5), S(4), SE(3) -->
+                        <Button Grid.Row="2" Grid.Column="0" Tag="5" Click="Direction_Click" ToolTip="SW — 225°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="5">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            SW
+                        </Button>
+                        <Button Grid.Row="2" Grid.Column="1" Tag="4" Click="Direction_Click" ToolTip="S — 180°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="4">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            S
+                        </Button>
+                        <Button Grid.Row="2" Grid.Column="2" Tag="3" Click="Direction_Click" ToolTip="SE — 135°">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource CompassCell}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentDirection}" Value="3">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            SE
+                        </Button>
+                    </Grid>
+
+                    <!-- Direction index readout -->
+                    <DockPanel Margin="0,0,0,4">
+                        <TextBlock DockPanel.Dock="Left" Text="Dir " FontSize="10.5"
+                                   Foreground="{StaticResource TextLabelBrush}" VerticalAlignment="Center"/>
+                        <TextBlock DockPanel.Dock="Right" FontSize="10.5" Typography.NumeralAlignment="Tabular"
+                                   Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"
+                                   Text="{Binding CurrentDirection, Mode=OneWay}"/>
+                    </DockPanel>
+                    <!-- Direction slider (only interactive when a sheet is loaded) -->
+                    <Slider Minimum="0" Maximum="7"
+                            Value="{Binding CurrentDirection, Mode=TwoWay}"
+                            IsSnapToTickEnabled="True" TickFrequency="1">
+                        <Slider.Style>
+                            <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+                                <Setter Property="IsEnabled" Value="False"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Main.HasSheet}" Value="True">
+                                        <Setter Property="IsEnabled" Value="True"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+                </StackPanel>
+
+                <!-- ===== Right: Output controls ===== -->
+                <StackPanel Grid.Column="2">
+
+                    <!-- Sprite size + Max colors -->
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="6"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="SPRITE PX" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextLabelBrush}" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding SpriteSize, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="MAX COLORS" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextLabelBrush}" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding MaxColors, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Generate sheet (primary / accent) -->
+                    <Button Style="{StaticResource PrimaryButton}"
+                            Content="Generate sheet"
+                            Command="{Binding GenerateCommand}"
+                            Margin="0,0,0,8"/>
+
+                    <!-- Progress: success dot + text -->
+                    <Grid MinHeight="16" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Ellipse Grid.Column="0" Width="6" Height="6"
+                                 Fill="{StaticResource SuccessBrush}"
+                                 VerticalAlignment="Center" Margin="0,0,6,0">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SheetImage}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <TextBlock Grid.Column="1" Text="{Binding Progress}"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" TextWrapping="Wrap" FontSize="11"/>
+                    </Grid>
+
+                    <!-- Divider -->
+                    <Rectangle Height="1" Fill="{StaticResource BorderSubtleBrush}" Margin="0,0,0,8"/>
+
+                    <!-- Save PNG -->
+                    <Button Content="Save PNG…" Command="{Binding SaveCommand}"/>
+                </StackPanel>
+            </Grid>
+        </DockPanel>
+    </Border>
+</UserControl>

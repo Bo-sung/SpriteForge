@@ -1,0 +1,91 @@
+<UserControl x:Class="SpriteForge.Gui.Views.EquipmentPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:SpriteForge.Gui.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:EquipmentViewModel, IsDesignTimeCreatable=False}">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </UserControl.Resources>
+
+    <GroupBox Header="Equipment">
+        <StackPanel>
+            <!-- Load manifest (secondary button). -->
+            <Button Content="Load equipment…"
+                    Command="{Binding LoadCommand}"
+                    Margin="0,0,0,8" />
+
+            <!-- Attachment list (transparent; ListBoxItem hover/selection come from Theme.xaml). -->
+            <ListBox ItemsSource="{Binding Attachments}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     HorizontalContentAlignment="Stretch"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     Margin="0,0,0,8">
+                <ListBox.Style>
+                    <Style TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsEmpty}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ListBox.Style>
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:AttachmentItem}">
+                        <Grid Height="27">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,8,0" />
+
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Name}"
+                                       Foreground="{StaticResource ControlTextBrush}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding SocketLabel}"
+                                       Foreground="{StaticResource TextLabelBrush}"
+                                       FontStyle="Italic"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Right"
+                                       Margin="8,0,0,0" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Dashed empty state (1px dashed InputBorderBrush, muted italic). -->
+            <Grid Height="80"
+                  Margin="0,0,0,8"
+                  Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}">
+                <Rectangle Stroke="{StaticResource InputBorderBrush}"
+                           StrokeThickness="1"
+                           StrokeDashArray="3 3"
+                           RadiusX="3"
+                           RadiusY="3"
+                           SnapsToDevicePixels="True" />
+                <TextBlock Text="No equipment loaded."
+                           Foreground="{StaticResource TextMutedBrush}"
+                           FontStyle="Italic"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Grid>
+
+            <!-- Clear (secondary button). -->
+            <Button Content="Clear"
+                    Command="{Binding ClearCommand}" />
+        </StackPanel>
+    </GroupBox>
+</UserControl>

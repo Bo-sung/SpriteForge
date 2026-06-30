@@ -1,0 +1,226 @@
+<UserControl x:Class="SpriteForge.Gui.Views.AnimationPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:vm="clr-namespace:SpriteForge.Gui.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:AnimationViewModel, IsDesignTimeCreatable=False}"
+             d:DesignHeight="238" d:DesignWidth="600">
+    <UserControl.Resources>
+        <!-- MDL2 glyph that inherits the parent button's Foreground. -->
+        <Style x:Key="GlyphText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        </Style>
+
+        <!-- Transport button: secondary look, 28px tall. -->
+        <Style x:Key="TransportButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource SecondaryControlBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource ControlTextBrush}"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="3" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource BorderStrongBrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource BorderHoverBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource ControlPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource DisabledFill2Brush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource BorderSubtleBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Play/Pause: accent tint + accent glyph while playing. -->
+        <Style x:Key="PlayPauseButton" TargetType="Button" BasedOn="{StaticResource TransportButton}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentTintBrush}"/>
+                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Camera stat badge chip. -->
+        <Style x:Key="CamBadge" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SecondaryControlBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="7,3"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Card shell: PanelBrush bg, top border separates from preview above. -->
+    <Border Background="{StaticResource PanelBrush}"
+            BorderBrush="{StaticResource BorderSubtleBrush}"
+            BorderThickness="0,1,0,0">
+        <DockPanel>
+            <!-- Header (28px): icon + "ANIMATION" + frame count badge (right). -->
+            <Border DockPanel.Dock="Top" Height="28"
+                    Background="{StaticResource PanelHeaderBrush}"
+                    BorderBrush="{StaticResource BorderSubtleBrush}"
+                    BorderThickness="0,0,0,1">
+                <DockPanel Margin="9,0">
+                    <!-- Frame count badge (right) -->
+                    <Border DockPanel.Dock="Right" VerticalAlignment="Center"
+                            Background="{StaticResource SecondaryControlBrush}"
+                            BorderBrush="{StaticResource BorderStrongBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="6,1">
+                        <TextBlock FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}">
+                            <Run Text="{Binding Main.Time, Mode=OneWay}"/>
+                            <Run Text=" / "/>
+                            <Run Text="{Binding Main.MaxFrameIndex, Mode=OneWay}"/>
+                        </TextBlock>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Play icon (MDL2 U+E768) -->
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" FontSize="11"
+                                   Foreground="{StaticResource HeaderTextBrush}" Margin="0,0,6,0"/>
+                        <TextBlock Text="ANIMATION" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{StaticResource HeaderTextBrush}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- Body -->
+            <StackPanel Margin="9,8,9,9">
+
+                <!-- Clip name + frame readout row -->
+                <DockPanel Margin="0,0,0,7">
+                    <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11.5"
+                               Typography.NumeralAlignment="Tabular">
+                        <Run Text="frame "/>
+                        <Run Text="{Binding Main.Time, Mode=OneWay}"/>
+                        <Run Text=" / "/>
+                        <Run Text="{Binding Main.MaxFrameIndex, Mode=OneWay}"/>
+                    </TextBlock>
+                    <TextBlock VerticalAlignment="Center">
+                        <Run Text="Clip: " Foreground="{StaticResource TextLabelBrush}"/>
+                        <Run Text="{Binding Main.AnimName, Mode=OneWay}"
+                             FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+                    </TextBlock>
+                </DockPanel>
+
+                <!-- Timeline slider -->
+                <Slider Minimum="0" Maximum="{Binding Main.MaxFrameIndex}" Value="{Binding Main.Time}"
+                        IsSnapToTickEnabled="True" TickFrequency="1" Margin="0,0,0,2"/>
+
+                <!-- Tick labels: 0 and max -->
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding Main.MaxFrameIndex, Mode=OneWay}"
+                               FontSize="10" Foreground="{StaticResource TextMutedBrush}"/>
+                    <TextBlock Text="0" FontSize="10" Foreground="{StaticResource TextMutedBrush}"/>
+                </DockPanel>
+
+                <!-- Transport buttons: |< [▶▶ wide] ■ >| -->
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="2*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Style="{StaticResource TransportButton}" Margin="0,0,2,0"
+                            Command="{Binding StepBackCommand}" ToolTip="Step back">
+                        <TextBlock Style="{StaticResource GlyphText}" Text="&#xE892;"/>
+                    </Button>
+                    <Button Grid.Column="1" Style="{StaticResource PlayPauseButton}" Margin="0,0,2,0"
+                            Command="{Binding PlayPauseCommand}" ToolTip="Play / Pause">
+                        <TextBlock>
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource GlyphText}">
+                                    <Setter Property="Text" Value="&#xE768;"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                            <Setter Property="Text" Value="&#xE769;"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Button>
+                    <Button Grid.Column="2" Style="{StaticResource TransportButton}" Margin="0,0,2,0"
+                            Command="{Binding StopCommand}" ToolTip="Stop">
+                        <TextBlock Style="{StaticResource GlyphText}" Text="&#xE71A;"/>
+                    </Button>
+                    <Button Grid.Column="3" Style="{StaticResource TransportButton}"
+                            Command="{Binding StepForwardCommand}" ToolTip="Step forward">
+                        <TextBlock Style="{StaticResource GlyphText}" Text="&#xE893;"/>
+                    </Button>
+                </Grid>
+
+                <!-- Loop + In-place checkboxes -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <CheckBox Content="Loop" IsChecked="{Binding Loop}" Margin="0,0,16,0"/>
+                    <CheckBox Content="In-place" IsChecked="{Binding Main.InPlace}"/>
+                </StackPanel>
+
+                <!-- Divider -->
+                <Rectangle Height="1" Fill="{StaticResource BorderSubtleBrush}" Margin="0,0,0,8"/>
+
+                <!-- Camera stat badges -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="CAM" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <Border Style="{StaticResource CamBadge}" Margin="0,0,4,0">
+                        <TextBlock FontSize="10.5" Foreground="{StaticResource TextSecondaryBrush}">
+                            <Run Text="Pitch "/>
+                            <Run Text="{Binding Main.RotX, Mode=OneWay, StringFormat='{}{0:F1}°'}"/>
+                        </TextBlock>
+                    </Border>
+                    <Border Style="{StaticResource CamBadge}" Margin="0,0,4,0">
+                        <TextBlock FontSize="10.5" Foreground="{StaticResource TextSecondaryBrush}">
+                            <Run Text="Yaw "/>
+                            <Run Text="{Binding Main.RotY, Mode=OneWay, StringFormat='{}{0:F0}°'}"/>
+                        </TextBlock>
+                    </Border>
+                    <Border Style="{StaticResource CamBadge}" Margin="0,0,4,0">
+                        <TextBlock FontSize="10.5" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Text="{Binding Main.Zoom, Mode=OneWay, StringFormat='×{0:F2}'}"/>
+                    </Border>
+                    <!-- Ortho badge: only visible when Ortho is on -->
+                    <Border Margin="0,0,4,0"
+                            Background="{StaticResource AccentTintBrush}"
+                            BorderBrush="{StaticResource AccentBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="7,3">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Main.Ortho}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="Ortho" FontSize="10.5" Foreground="{StaticResource AccentBrush}"/>
+                    </Border>
+                </StackPanel>
+
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</UserControl>
