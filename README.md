@@ -1,44 +1,71 @@
 # SpriteForge
 
-**CLI Pipeline for Converting 3D Rigging Models into Pixel Art Sprite Sheets**
+**Turn rigged 3D character models into pixel-art sprite sheets** — render from N fixed directions,
+downsample with dominant-color block voting, quantize to a limited palette, and pack the result into a
+sheet (or frame sequence) ready for Unity/Unreal import.
 
-Inspired by the sprite creation method from StarCraft 1, it processes high-resolution 3D rendering → downsampling → pixel art post-processing → preparation for Unity import in a single command.
+Inspired by how StarCraft 1's sprites were made: render a high-resolution 3D model from fixed
+isometric directions, then downsample pixel by pixel. SpriteForge automates that pipeline with modern
+tools (OpenGL offscreen rendering, a ported [unfake.js](https://github.com/jenissimo/unfake.js)-style
+pixel-art post-process) and adds a desktop GUI on top for interactive setup.
 
 ---
 
-## Background
+## What's in this repo
 
-SC1 sprites were created by rendering high-resolution 3D models on Silicon Graphics workstations and downsampling pixel by pixel. SpriteForge recreates this pipeline with modern tools, adding automated post-processing to enable high-quality sprite creation independently.
+Three apps share one core library (`SpriteForge.Core`) — the 3D→sprite pipeline is implemented once and
+reused by all three:
+
+| App | Type | What it does |
+|---|---|---|
+| **`spriteforge.exe`** | CLI | The full pipeline: FBX/GLB → render N directions → pixel art → sprite sheet |
+| **`pixelart.exe`** | CLI | Standalone pixel-art post-processing (palette, dither, outline) on existing images — no 3D involved |
+| **`SpriteForge.Gui`** | WPF desktop app | Interactive: load a mesh, tune camera/animation/equipment with a live preview, generate the sheet, and play it back per direction — before committing to a batch CLI run |
 
 ---
 
 ## Key Features
 
-### Automatic 3D to Pixel Art Conversion
-Input FBX/GLB files, rotate cameras in specified directions to render off-screen images, then convert to pixel art and pack into sprite sheets.
+### Automatic 3D → pixel art conversion
+Input FBX/GLB (rigged mesh + animation, or a static mesh); the renderer rotates the **model** per
+direction (camera and light stay fixed, so lighting/framing stay consistent) and produces transparent
+offscreen frames, which are then converted to pixel art and packed into a sheet.
 
-### Directional Rendering (2 / 4 / 8 Directions)
-Default is 8 directions (0° ~ 315°, 45° intervals). Supports 2 directions (front/back) and 4 directions as options. The vertical camera angle is set to 26.5° (matching SC1 isometric angle).
+### Directional rendering (2 / 4 / 8 directions)
+Default is 8 directions (0°–315°, 45° steps); 2 (front/back) and 4 are also supported. Default camera
+pitch is 26.5° (SC1-style isometric). Framing is computed once per clip so scale/centering stay constant
+across every frame and direction.
 
-### Pixel Art Post-Processing Pipeline
-Applies a processing layer ported from the [unfake.js](https://github.com/jenissimo/unfake.js) algorithm in C#, not just nearest-neighbor downsampling.
+### Pixel-art post-processing pipeline
+Ported from [unfake.js](https://github.com/jenissimo/unfake.js) and extended, applied in this order:
 
-| Stage | Processing Content |
+| Stage | What it does |
 |---|---|
-| Dominant Downscale | Selects representative colors through frequency voting within blocks to minimize boundary bleeding |
-| Alpha Binarization | Divides semi-transparent boundary pixels into 0 or 255 to ensure transparent backgrounds |
-| Edge Dilation | Fills RGB of transparent border pixels with adjacent opaque colors to prevent jagged edges |
-| Palette Quantization | Limits color count using Wu Quantization (default 32 colors), allowing fixed palette specification |
-| Artifact Cleanup | Combines noise removal (morphological) and jagged edge smoothing |
+| Morphological Clean | Removes isolated noise specks before downscaling (erode → dilate) |
+| Dominant Downscale | Per-block frequency voting for the representative color, minimizing edge bleed |
+| Alpha Binarization | Hard-thresholds semi-transparent edge pixels to 0/255 for a clean transparent background |
+| Edge Dilation | Copies RGB from adjacent opaque pixels into transparent border pixels to prevent dark fringing |
+| Dither *(optional)* | Bayer (ordered) or Floyd–Steinberg (error-diffusion), applied against the same palette used for quantization |
+| Palette Quantization | Wu quantization (default 32 colors) or a supplied fixed palette |
+| Jaggy Clean | Replaces pixels that disagree with every cardinal neighbor |
+| Outline *(optional)* | Draws an outer or inner silhouette outline as the final step, after cleanup |
 
-### Transparent Background Guarantee
-Maintains alpha channels from rendering to output, ensuring backgrounds are always fully transparent (alpha 0).
+### Transparent background, guaranteed
+Alpha is preserved end to end; the OpenGL FBO clears to `(0,0,0,0)` and every post-process step treats
+transparency as first-class (never filled with a background color).
 
-### Direct Unity Import Ready
-Outputs sprite sheets (PNG) along with pivot and frame information files.
+### Equipment (weapons & armor) and cross-skeleton retargeting
+Attach weapons/armor via a JSON manifest (Unreal-style sockets or master-pose skinning), and/or retarget
+an animation authored for one skeleton onto a differently-named rig (joint mapping by bone name).
 
-### Extensible GUI Architecture
-Designed with separate core libraries and CLI entry points for potential future GUI frontend integration without altering core functionality.
+### Engine-style camera
+Position (X/Y/Z pan), rotation (X/Y/Z — pitch/facing/roll), zoom, perspective/orthographic, and
+Y-up/Z-up source axis — the same controls whether you're driving the CLI or the GUI.
+
+### Interactive GUI on the same core
+`SpriteForge.Gui` never reimplements rendering — it drives `SpriteForge.Core` through a managed preview
+facade (`PreviewSession`) on a dedicated GL thread, so what you see in the live preview is the same
+renderer the CLI uses for the final sheet.
 
 ---
 
@@ -52,11 +79,13 @@ FBX / GLB
     │  Hi-res frames × (direction count × animation frame count)
     ▼
 [PixelArtProcessor]
-    ├─ MorphClean       (pre-downscale noise removal on hi-res)
-    ├─ DominantDownscale
+    ├─ MorphClean
+    ├─ DominantDownscale   (skipped if sprite-size 0 — used by pixelart.exe on already-pixel-art images)
     ├─ AlphaBinarize
+    ├─ Dither              (optional: bayer | floyd)
     ├─ PaletteQuantize
-    └─ JaggyClean
+    ├─ JaggyClean
+    └─ Outline             (optional: outer | inner)
     │  Pixel art frames
     ▼
 [SpriteSheetPacker]   ← rows = directions, columns = frames
@@ -71,16 +100,16 @@ output/
 
 ## Build & Run
 
-**Requirements:** Windows, .NET 8 or higher
+**Requirements:** Windows, .NET 8 SDK or higher
 
 ```powershell
-# Build
+# Build + publish the two self-contained single-file CLIs -> ./bin/spriteforge.exe, ./bin/pixelart.exe
 ./build.ps1
 
-# Default run (8 directions, 48px, 32 colors)
+# spriteforge.exe: default run (8 directions, 48px, 32 colors)
 ./bin/spriteforge.exe --input "Knight.fbx"
 
-# With options
+# spriteforge.exe: with options
 ./bin/spriteforge.exe `
   --input "Knight.fbx" `
   --anim "Knight_Walk.fbx" `
@@ -91,11 +120,18 @@ output/
   --max-colors 32 `
   --output-mode both `
   --out "./output"
+
+# pixelart.exe: re-process an existing image or a whole folder (no 3D)
+./bin/pixelart.exe --input frame.png --output frame_out.png --max-colors 16 --outline --dither floyd
+./bin/pixelart.exe --input ./frames/ --output ./frames_out/ --max-colors 16
+
+# SpriteForge.Gui: desktop app (not published by build.ps1 — run via dotnet)
+dotnet run --project src/SpriteForge.Gui
 ```
 
 ---
 
-## CLI Options
+## `spriteforge.exe` — CLI options
 
 | Option | Default | Description |
 |---|---|---|
@@ -126,6 +162,52 @@ output/
 | `--retarget` | — | Retarget map JSON for cross-skeleton animation |
 | `--list-bones` | — | Dump skeleton/node tree, then exit |
 | `--verbose` | — | Print per-frame progress |
+
+## `pixelart.exe` — CLI options
+
+Standalone image → pixel-art post-processing. `--input`/`--output` each accept a single file or a
+folder (batch mode processes every `.png`/`.jpg`/`.jpeg`/`.bmp` in the folder).
+
+| Option | Default | Description |
+|---|---|---|
+| `--input` | *(Required)* | Image file or folder to convert |
+| `--output` | `./output` | Output file (single input) or folder (batch input) |
+| `--sprite-size` | `0` | Downscale target resolution (square); `0` = skip downscaling (image is already pixel art) |
+| `--max-colors` | `32` | Palette color limit for Wu quantization |
+| `--palette` | — | Fixed palette PNG (skips Wu quantization) |
+| `--alpha-threshold` | `128` | Alpha binarization cutoff 0–255 |
+| `--no-edge-dilate` | — | Disable edge dilation |
+| `--cleanup` | `morph,jaggy` | Comma-separated cleanup passes: `morph`, `jaggy` |
+| `--outline` | — | Draw an outline around the silhouette |
+| `--outline-color` | `#000000` | Outline color: `#RRGGBB` or `#AARRGGBB` |
+| `--outline-type` | `outer` | `outer` / `inner` |
+| `--dither` | `none` | `none` / `bayer` / `floyd` |
+| `--verbose` | — | Print per-file progress |
+
+---
+
+## `SpriteForge.Gui` — desktop app
+
+A WPF tool built around the same core, for interactive setup before batch-generating with the CLI (or
+generating directly from the GUI). Run with `dotnet run --project src/SpriteForge.Gui`.
+
+- **Model** — browse a mesh and an optional separate animation file; set render size / fps / direction
+  count; Load/Reload.
+- **Camera** — engine-style transform: **position** (X/Y/Z pan), **rotation** (X = pitch, Y = facing/orbit
+  yaw, Z = roll, degrees), **zoom**, plus orthographic, Z-up source, and in-place (remove root motion)
+  toggles. Every change re-renders the live preview.
+- **Timeline / Animation** — a frame scrubber plus transport controls (play/pause, stop, step,
+  loop) to visually confirm the animation on the mesh.
+- **Equipment** — load an equipment manifest JSON; toggle individual attachments on/off and see them on
+  the character immediately.
+- **Output** — generate the full sprite sheet, preview it inline, and save the sheet PNG + metadata.json.
+- **2D result window** — plays the just-generated sheet back as an animation, one direction at a time
+  (step through directions, play/pause, loop) — the same 8-direction sheet that gets saved, but viewed as
+  motion instead of a static grid. Resizable against the 3D preview via a draggable splitter.
+
+The GUI never reimplements the renderer: `SpriteForge.Core.Rendering.PreviewSession` wraps
+`OffscreenRenderer` on a dedicated OpenGL thread for single-frame interactive preview, and "Generate
+sheet" runs the exact same `RenderJob`/`PixelArtProcessor` pipeline the CLI uses.
 
 ---
 
@@ -161,7 +243,7 @@ output/
       "sheetRow": 0
     }
   ],
-  "pivot": { "x": 0.5, "y": 0.0 }
+  "pivot": { "x": 0.5, "y": 0.5 }
 }
 ```
 
@@ -176,9 +258,11 @@ output/
 | Image I/O | SkiaSharp | MIT |
 | Palette Quantization | Wu quantizer (vendored) | MIT |
 | CLI Parsing | System.CommandLine | MIT |
+| Desktop GUI | WPF (.NET 8) | MIT |
 | Runtime | .NET 8 | MIT |
 
-Pixel art post-processing algorithm independently implemented in C# based on [unfake.js](https://github.com/jenissimo/unfake.js) (MIT).
+Pixel art post-processing algorithm independently implemented in C# based on
+[unfake.js](https://github.com/jenissimo/unfake.js) (MIT).
 
 ---
 
@@ -187,15 +271,21 @@ Pixel art post-processing algorithm independently implemented in C# based on [un
 ```
 SpriteForge/
 ├── src/
-│   ├── SpriteForge.Core/       # Core library (reusable for GUI frontend)
-│   │   ├── Rendering/          # OffscreenRenderer, DirectionScheduler, RenderJob
-│   │   ├── PixelArt/           # Pixel art processing pipeline
+│   ├── SpriteForge.Core/       # Core library shared by all three apps
+│   │   ├── Rendering/          # OffscreenRenderer, DirectionScheduler, RenderJob, PreviewSession
+│   │   ├── PixelArt/           # Pixel-art processing pipeline (incl. DitherPass, OutlinePass)
 │   │   ├── Packing/            # Sprite sheet packing and metadata
 │   │   └── Models/             # Options and data classes
-│   └── SpriteForge.Cli/        # CLI entry point
+│   ├── SpriteForge.Cli/        # spriteforge.exe — the 3D pipeline CLI
+│   ├── PixelArt.Cli/           # pixelart.exe — standalone pixel-art post-processing CLI
+│   └── SpriteForge.Gui/        # WPF desktop app (MVVM around SpriteForge.Core)
+│       ├── ViewModels/         # MainViewModel + per-panel view models (animation, equipment, output, sheet player)
+│       ├── Views/              # Panel UserControls
+│       └── Services/           # PreviewService (renderer <-> WPF bitmap bridge)
+├── design/                     # Design reference: style spec + mockup exported from Claude Design
 ├── tests/
-│   └── SpriteForge.Tests/      # Unit tests
-└── build.ps1                   # win-x64 single-file build
+│   └── SpriteForge.Tests/      # Unit tests (86 as of this writing)
+└── build.ps1                   # Publishes spriteforge.exe + pixelart.exe as win-x64 single-file builds
 ```
 
 ---
