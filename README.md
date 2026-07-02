@@ -9,6 +9,19 @@ isometric directions, then downsample pixel by pixel. SpriteForge automates that
 tools (OpenGL offscreen rendering, a ported [unfake.js](https://github.com/jenissimo/unfake.js)-style
 pixel-art post-process) and adds a desktop GUI on top for interactive setup.
 
+## Contents
+
+- [What's in this repo](#whats-in-this-repo)
+- [Key Features](#key-features)
+- [Pipeline Flow](#pipeline-flow)
+- [Build & Run](#build--run)
+- [CLI Reference](#cli-reference) — [`spriteforge.exe`](#spriteforgeexe) · [`pixelart.exe`](#pixelartexe)
+- [Desktop GUI](#desktop-gui---spriteforgegui)
+- [Output Files](#output-files)
+- [Technology Stack](#technology-stack)
+- [Project Structure](#project-structure)
+- [License](#license)
+
 ---
 
 ## What's in this repo
@@ -131,7 +144,9 @@ dotnet run --project src/SpriteForge.Gui
 
 ---
 
-## `spriteforge.exe` — CLI options
+## CLI Reference
+
+### `spriteforge.exe`
 
 | Option | Default | Description |
 |---|---|---|
@@ -163,7 +178,7 @@ dotnet run --project src/SpriteForge.Gui
 | `--list-bones` | — | Dump skeleton/node tree, then exit |
 | `--verbose` | — | Print per-frame progress |
 
-## `pixelart.exe` — CLI options
+### `pixelart.exe`
 
 Standalone image → pixel-art post-processing. `--input`/`--output` each accept a single file or a
 folder (batch mode processes every `.png`/`.jpg`/`.jpeg`/`.bmp` in the folder).
@@ -186,7 +201,7 @@ folder (batch mode processes every `.png`/`.jpg`/`.jpeg`/`.bmp` in the folder).
 
 ---
 
-## `SpriteForge.Gui` — desktop app
+## Desktop GUI — `SpriteForge.Gui`
 
 A WPF tool built around the same core, for interactive setup before batch-generating with the CLI (or
 generating directly from the GUI). Run with `dotnet run --project src/SpriteForge.Gui`.
@@ -284,7 +299,7 @@ SpriteForge/
 │       └── Services/           # PreviewService (renderer <-> WPF bitmap bridge)
 ├── design/                     # Design reference: style spec + mockup exported from Claude Design
 ├── tests/
-│   └── SpriteForge.Tests/      # Unit tests (86 as of this writing)
+│   └── SpriteForge.Tests/      # Unit tests
 └── build.ps1                   # Publishes spriteforge.exe + pixelart.exe as win-x64 single-file builds
 ```
 
