@@ -9,6 +9,9 @@ isometric directions, then downsample pixel by pixel. SpriteForge automates that
 tools (OpenGL offscreen rendering, a ported [unfake.js](https://github.com/jenissimo/unfake.js)-style
 pixel-art post-process) and adds a desktop GUI on top for interactive setup.
 
+The rendering core originated as a fork/extension of the same author's
+[Bo-sung/ComfyUI-FBX-ControlNet-Converter](https://github.com/Bo-sung/ComfyUI-FBX-ControlNet-Converter).
+
 ## Contents
 
 - [What's in this repo](#whats-in-this-repo)
@@ -268,16 +271,18 @@ output/
 
 | Role | Library | License |
 |---|---|---|
-| 3D Loading / Skinning | Silk.NET.Assimp | MIT |
-| OpenGL Rendering | Silk.NET.OpenGL + GLFW | MIT |
+| 3D Loading / Skinning | Silk.NET.Assimp (wraps native Assimp) | MIT (wrapper) / BSD-3-Clause (Assimp) |
+| OpenGL Rendering | Silk.NET.OpenGL + Silk.NET.GLFW (wraps native GLFW) | MIT (wrapper) / zlib/libpng (GLFW) |
 | Image I/O | SkiaSharp | MIT |
-| Palette Quantization | Wu quantizer (vendored) | MIT |
+| Palette Quantization | Wu quantizer (vendored, original implementation) | MIT |
 | CLI Parsing | System.CommandLine | MIT |
 | Desktop GUI | WPF (.NET 8) | MIT |
 | Runtime | .NET 8 | MIT |
 
 Pixel art post-processing algorithm independently implemented in C# based on
-[unfake.js](https://github.com/jenissimo/unfake.js) (MIT).
+[unfake.js](https://github.com/jenissimo/unfake.js) (MIT). Native binaries bundled into the
+published executables (Assimp, GLFW) carry their own license terms — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for full attribution.
 
 ---
 
@@ -307,4 +312,5 @@ SpriteForge/
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Third-party components bundled into the published executables are
+listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
