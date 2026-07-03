@@ -1,0 +1,17 @@
+{
+  "spriteWidth": 64,
+  "spriteHeight": 64,
+  "directions": 8,
+  "animations": [
+    {
+      "name": "Swing",
+      "frameCount": 12,
+      "fps": 12,
+      "sheetRow": 0
+    }
+  ],
+  "pivot": {
+    "x": 0.5,
+    "y": 0.5
+  }
+}

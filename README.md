@@ -1,5 +1,8 @@
 # SpriteForge
 
+[![CI](https://github.com/Bo-sung/SpriteForge/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Bo-sung/SpriteForge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Turn rigged 3D character models into pixel-art sprite sheets** — render from N fixed directions,
 downsample with dominant-color block voting, quantize to a limited palette, and pack the result into a
 sheet (or frame sequence) ready for Unity/Unreal import.
@@ -12,8 +15,41 @@ pixel-art post-process) and adds a desktop GUI on top for interactive setup.
 The rendering core originated as a fork/extension of the same author's
 [Bo-sung/ComfyUI-FBX-ControlNet-Converter](https://github.com/Bo-sung/ComfyUI-FBX-ControlNet-Converter).
 
+## Example Output
+
+Rendered directly from this repo's own committed test rig (`samples/rigged.gltf` +
+`samples/anim.gltf`, an 8-direction, 12-frame "Swing" animation) via
+`spriteforge.exe --directions 8 --sprite-size 64` — rows are directions, columns are frames:
+
+![Sample sprite sheet: an 8-direction, 12-frame turntable of a simple test rig, packed into a sheet with a transparent background](docs/sample_sheet.png)
+
+This is a plain placeholder rig used for automated testing, not a character — but it's the tool's
+actual, unedited output, reproducible with the command above. Point it at a real rigged character
+(FBX/GLB) and the same pipeline produces a game-ready sprite sheet from it; see
+[Build & Run](#build--run).
+
+## Engineering Highlights
+
+- **Headless OpenGL renderer written from scratch** (Silk.NET + GLFW): hidden-window GL 3.3 core
+  context, an offscreen RGBA8 framebuffer, and CPU-side skeletal skinning + animation-channel
+  sampling — no game engine dependency.
+- **Two image-processing algorithms ported to C#** from their original sources: Xiaolin Wu's color
+  quantizer (*Graphics Gems II*, 1991) and unfake.js's dominant-color block downscaling — plus
+  original Bayer/Floyd–Steinberg dithering and silhouette-outline passes built on top.
+- **Engine-parity rigging features**: Unreal-style socket/master-pose equipment attachment,
+  cross-skeleton animation retargeting by bone-name joint mapping, and root-motion detection with
+  in-place normalization.
+- **Thread-safe interactive preview**: a dedicated OpenGL thread (`PreviewSession`) marshals
+  single-frame renders for the WPF GUI so the UI thread never touches GL's thread-affine context,
+  while reusing the exact same renderer the batch CLI uses — no parallel/duplicated render path.
+- **One core, three front ends**: two CLIs and a WPF desktop app share a single core library with
+  zero duplicated rendering or pixel-art logic.
+- **86 unit tests**, GitHub Actions CI building and testing every push.
+
 ## Contents
 
+- [Example Output](#example-output)
+- [Engineering Highlights](#engineering-highlights)
 - [What's in this repo](#whats-in-this-repo)
 - [Key Features](#key-features)
 - [Pipeline Flow](#pipeline-flow)

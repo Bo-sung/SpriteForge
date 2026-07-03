@@ -20,13 +20,13 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore
-        run: dotnet restore PixelSprite.sln
+        run: dotnet restore SpriteForge.sln
 
       - name: Build
-        run: dotnet build PixelSprite.sln -c Release --no-restore -warnaserror
+        run: dotnet build SpriteForge.sln -c Release --no-restore -warnaserror
 
       - name: Test
-        run: dotnet test PixelSprite.sln -c Release --no-build --verbosity normal
+        run: dotnet test SpriteForge.sln -c Release --no-build --verbosity normal
 
   publish:
     name: Publish single-file exe
@@ -45,9 +45,11 @@ jobs:
       - name: Publish
         run: pwsh ./build.ps1
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pixelsprite-win-x64
-          path: ./bin/pixelsprite.exe
+          name: spriteforge-win-x64
+          path: |
+            ./bin/spriteforge.exe
+            ./bin/pixelart.exe
           if-no-files-found: error
